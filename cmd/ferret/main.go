@@ -80,7 +80,7 @@ func runCopartSearch(ctx context.Context, args []string) {
 	odoMax := fs.Int("odo-max", 85_000, "max odometer miles")
 	daysAhead := fs.Int("days", 14, "auction date window: today + N days")
 	damage := fs.String("damage", "DAMAGECODE_HL", "damage type code")
-	title := fs.String("title", "TITLEGROUP_C", "title group code")
+	title := fs.String("title", "C", "title groups: C (clean), S (salvage), or C,S for both")
 	maxPages := fs.Int("pages", 0, "max pages to scrape (0 = unlimited)")
 	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
 	outFile := fs.String("out", "", "write JSON results to file (default: stdout)")
@@ -112,8 +112,8 @@ func runCopartSearch(ctx context.Context, args []string) {
 		YearMax:    *yearMax,
 		OdoMax:     *odoMax,
 		DateTo:     time.Now().AddDate(0, 0, *daysAhead),
-		DamageCode: *damage,
-		TitleGroup: *title,
+		DamageCode:  *damage,
+		TitleGroups: strings.Split(*title, ","),
 		MaxPages:   *maxPages,
 	}
 

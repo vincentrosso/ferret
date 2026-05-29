@@ -19,8 +19,9 @@ type SearchParams struct {
 	OdoMax     int       // max odometer; defaults to 85 000
 	DateFrom   time.Time // auction start; defaults to today
 	DateTo     time.Time // auction end; defaults to today + 14 days
-	DamageCode string    // Copart filter code; defaults to DAMAGECODE_HL (hail)
-	TitleGroup string    // Copart filter code; defaults to TITLEGROUP_C (clean)
+	DamageCode  string   // Copart filter code; defaults to DAMAGECODE_HL (hail)
+	TitleGroups []string // one or more title group codes; defaults to [TITLEGROUP_C]
+	             	     // known values: TITLEGROUP_C (clean), TITLEGROUP_S (salvage)
 	MaxPages   int       // 0 = unlimited
 }
 
@@ -47,8 +48,8 @@ func (p *SearchParams) defaults() {
 	if p.DamageCode == "" {
 		p.DamageCode = "DAMAGECODE_HL"
 	}
-	if p.TitleGroup == "" {
-		p.TitleGroup = "TITLEGROUP_C"
+	if len(p.TitleGroups) == 0 {
+		p.TitleGroups = []string{"TITLEGROUP_C"}
 	}
 }
 
@@ -73,7 +74,7 @@ func (p SearchParams) BuildURL() (string, error) {
 				p.DateFrom.Format("2006-01-02"),
 				p.DateTo.Format("2006-01-02"),
 			)},
-			"TITL": {fmt.Sprintf("title_group_code:%s", p.TitleGroup)},
+			"TITL": titleFilters(p.TitleGroups),
 			"VEHT": {"vehicle_type_code:VEHTYPE_V"},
 			"YEAR": {fmt.Sprintf("lot_year:[%d TO %d]", p.YearMin, p.YearMax)},
 		},
@@ -112,6 +113,21 @@ type Lot struct {
 	IsHail        bool
 	IsSalvage     bool
 	ScrapedAt     time.Time
+}
+
+// titleFilters builds the TITL filter slice from one or more group codes.
+// Short aliases (C, S) are expanded to their full code.
+func titleFilters(groups []string) []string {
+	aliases := map[string]string{"C": "TITLEGROUP_C", "S": "TITLEGROUP_S"}
+	out := make([]string, len(groups))
+	for i, g := range groups {
+		g = strings.ToUpper(strings.TrimSpace(g))
+		if full, ok := aliases[g]; ok {
+			g = full
+		}
+		out[i] = "title_group_code:" + g
+	}
+	return out
 }
 
 // ── Row parsing helpers ───────────────────────────────────────────────────
