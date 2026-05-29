@@ -22,7 +22,8 @@ type SearchParams struct {
 	DamageCode  string   // Copart filter code; defaults to DAMAGECODE_HL (hail)
 	TitleGroups []string // one or more title group codes; defaults to [TITLEGROUP_C]
 	             	     // known values: TITLEGROUP_C (clean), TITLEGROUP_S (salvage)
-	MaxPages   int       // 0 = unlimited
+	Sort        []string // Solr sort fields; defaults to Copart's standard date sort
+	MaxPages    int      // 0 = unlimited
 }
 
 func (p *SearchParams) defaults() {
@@ -34,7 +35,7 @@ func (p *SearchParams) defaults() {
 		p.YearMin = now.Year() - 4
 	}
 	if p.YearMax == 0 {
-		p.YearMax = now.Year() + 2
+		p.YearMax = now.Year() + 1
 	}
 	if p.OdoMax == 0 {
 		p.OdoMax = 85_000
@@ -50,6 +51,9 @@ func (p *SearchParams) defaults() {
 	}
 	if len(p.TitleGroups) == 0 {
 		p.TitleGroups = []string{"TITLEGROUP_C"}
+	}
+	if len(p.Sort) == 0 {
+		p.Sort = []string{"auction_date_type desc", "auction_date_utc asc"}
 	}
 }
 
@@ -78,6 +82,7 @@ func (p SearchParams) BuildURL() (string, error) {
 			"VEHT": {"vehicle_type_code:VEHTYPE_V"},
 			"YEAR": {fmt.Sprintf("lot_year:[%d TO %d]", p.YearMin, p.YearMax)},
 		},
+		"sort":           p.Sort,
 		"watchListOnly":  false,
 		"searchName":     "",
 		"freeFormSearch": false,

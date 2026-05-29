@@ -213,6 +213,12 @@ func (s *Scraper) RunSearch(ctx context.Context, params SearchParams) ([]Lot, er
 		slog.Info("page scraped", "page", pageNum, "lots", len(pageLots), "total", len(lots)+len(pageLots))
 		lots = append(lots, pageLots...)
 
+		// Stop as soon as a page yields no new rows — Copart's next button stays
+		// enabled even on the last page, so we can't rely on it being disabled.
+		if len(pageLots) == 0 {
+			break
+		}
+
 		if !nextPage(page) {
 			break
 		}
