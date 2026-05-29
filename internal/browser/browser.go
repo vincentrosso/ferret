@@ -57,6 +57,9 @@ func (b *Browser) NewPage(url string) (*rod.Page, error) {
 	return page, nil
 }
 
+// Rod returns the underlying *rod.Browser for protocol-level calls.
+func (b *Browser) Rod() *rod.Browser { return b.rod }
+
 func (b *Browser) Close() {
 	b.rod.MustClose()
 }

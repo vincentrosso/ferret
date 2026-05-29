@@ -1,25 +1,50 @@
 package main
 
 import (
+	"bufio"
 	"context"
-	"encoding/json"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/vincentrosso/ferret/internal/browser"
-	"github.com/vincentrosso/ferret/internal/scraper"
+	"github.com/vincentrosso/ferret/scrapers/copart"
 )
 
 func main() {
-	headless := flag.Bool("headless", true, "run browser headless")
-	concurrency := flag.Int("concurrency", 3, "parallel detail pages")
-	flag.Parse()
+	if len(os.Args) < 3 {
+		usage()
+		os.Exit(1)
+	}
+
+	loadDotEnv(".env")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	switch os.Args[1] + " " + os.Args[2] {
+	case "copart login":
+		runCopartLogin(ctx, os.Args[3:])
+	case "copart check":
+		runCopartCheck(ctx, os.Args[3:])
+	default:
+		usage()
+		os.Exit(1)
+	}
+}
+
+func runCopartLogin(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("copart login", flag.ExitOnError)
+	headless := fs.Bool("headless", false, "headless browser (default false — show window for CAPTCHA)")
+	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
+	fs.Parse(args)
+
+	email := mustEnv("COPART_EMAIL")
+	password := mustEnv("COPART_PASSWORD")
 
 	br, err := browser.New(browser.Options{
 		Headless: *headless,
@@ -27,32 +52,99 @@ func main() {
 			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 	})
 	if err != nil {
-		slog.Error("launch browser", "err", err)
-		os.Exit(1)
+		fatal("launch browser", err)
 	}
 	defer br.Close()
 
-	_ = *concurrency // pipeline wired up when first scraper is added
+	sc := copart.New(br, email, password, *cookiePath)
+	if err := sc.Login(ctx); err != nil {
+		fatal("login", err)
+	}
+	fmt.Println("✓ logged in, session saved to", *cookiePath)
+}
 
-	// Smoke-test: open example.com and print title
-	page, err := br.NewPage("https://example.com")
+func runCopartCheck(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("copart check", flag.ExitOnError)
+	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
+	fs.Parse(args)
+
+	email := mustEnv("COPART_EMAIL")
+	password := mustEnv("COPART_PASSWORD")
+
+	br, err := browser.New(browser.Options{
+		Headless: true,
+		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	})
 	if err != nil {
-		slog.Error("new page", "err", err)
+		fatal("launch browser", err)
+	}
+	defer br.Close()
+
+	sc := copart.New(br, email, password, *cookiePath)
+	if err := sc.LoadSession(ctx); err != nil {
+		slog.Warn("no saved session, will require login", "err", err)
+	}
+
+	ok, err := sc.IsLoggedIn(ctx)
+	if err != nil {
+		fatal("check session", err)
+	}
+	if ok {
+		fmt.Println("✓ session is valid")
+	} else {
+		fmt.Println("✗ session expired — run: ferret copart login")
 		os.Exit(1)
 	}
-	defer page.MustClose()
+}
 
-	if err := page.WaitLoad(); err != nil {
-		slog.Error("wait load", "err", err)
+func mustEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		fmt.Fprintf(os.Stderr, "error: %s is not set (add to .env or export it)\n", key)
 		os.Exit(1)
 	}
+	return v
+}
 
-	title := page.MustInfo().Title
-	result := scraper.Result{"title": title, "url": "https://example.com"}
+func fatal(msg string, err error) {
+	slog.Error(msg, "err", err)
+	os.Exit(1)
+}
 
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	enc.Encode(result)
+func usage() {
+	fmt.Fprintln(os.Stderr, `ferret — scrape engine
 
-	<-ctx.Done()
+Usage:
+  ferret copart login  [-headless] [-cookies path]   login and save session
+  ferret copart check  [-cookies path]               verify saved session
+
+Credentials are read from env vars or .env file:
+  COPART_EMAIL, COPART_PASSWORD`)
+}
+
+// loadDotEnv reads key=value pairs from path into the process environment.
+// Silently skips if the file doesn't exist.
+func loadDotEnv(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(strings.Trim(v, `"`))
+		if os.Getenv(k) == "" { // don't override existing env
+			os.Setenv(k, v)
+		}
+	}
 }
