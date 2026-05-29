@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/vincentrosso/ferret/internal/browser"
 	"github.com/vincentrosso/ferret/scrapers/copart"
@@ -31,6 +33,8 @@ func main() {
 		runCopartLogin(ctx, os.Args[3:])
 	case "copart check":
 		runCopartCheck(ctx, os.Args[3:])
+	case "copart search":
+		runCopartSearch(ctx, os.Args[3:])
 	default:
 		usage()
 		os.Exit(1)
@@ -61,6 +65,76 @@ func runCopartLogin(ctx context.Context, args []string) {
 		fatal("login", err)
 	}
 	fmt.Println("✓ logged in, session saved to", *cookiePath)
+}
+
+func runCopartSearch(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("copart search", flag.ExitOnError)
+	makes := fs.String("makes", "HONDA,TOYOTA,NISSAN,CHEVROLET,ACURA", "comma-separated makes")
+	yearMin := fs.Int("year-min", 0, "minimum model year (default: 4 years ago)")
+	yearMax := fs.Int("year-max", 0, "maximum model year (default: current year + 2)")
+	odoMax := fs.Int("odo-max", 85_000, "max odometer miles")
+	daysAhead := fs.Int("days", 14, "auction date window: today + N days")
+	damage := fs.String("damage", "DAMAGECODE_HL", "damage type code")
+	title := fs.String("title", "TITLEGROUP_C", "title group code")
+	maxPages := fs.Int("pages", 0, "max pages to scrape (0 = unlimited)")
+	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
+	outFile := fs.String("out", "", "write JSON results to file (default: stdout)")
+	fs.Parse(args)
+
+	makeList := strings.Split(strings.ToUpper(*makes), ",")
+
+	br, err := browser.New(browser.Options{
+		Headless: true,
+		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	})
+	if err != nil {
+		fatal("launch browser", err)
+	}
+	defer br.Close()
+
+	email := mustEnv("COPART_EMAIL")
+	password := mustEnv("COPART_PASSWORD")
+	sc := copart.New(br, email, password, *cookiePath)
+
+	if err := sc.LoadSession(ctx); err != nil {
+		slog.Warn("no saved session — run: ferret copart login", "err", err)
+	}
+
+	params := copart.SearchParams{
+		Makes:      makeList,
+		YearMin:    *yearMin,
+		YearMax:    *yearMax,
+		OdoMax:     *odoMax,
+		DateTo:     time.Now().AddDate(0, 0, *daysAhead),
+		DamageCode: *damage,
+		TitleGroup: *title,
+		MaxPages:   *maxPages,
+	}
+
+	lots, err := sc.RunSearch(ctx, params)
+	if err != nil {
+		fatal("search", err)
+	}
+	slog.Info("search complete", "total_lots", len(lots))
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	out := os.Stdout
+	if *outFile != "" {
+		f, err := os.Create(*outFile)
+		if err != nil {
+			fatal("create output file", err)
+		}
+		defer f.Close()
+		out = f
+		enc = json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+	}
+	enc.Encode(lots)
+	if *outFile != "" {
+		fmt.Fprintf(os.Stderr, "wrote %d lots to %s\n", len(lots), *outFile)
+	}
 }
 
 func runCopartCheck(ctx context.Context, args []string) {
@@ -116,8 +190,11 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `ferret — scrape engine
 
 Usage:
-  ferret copart login  [-headless] [-cookies path]   login and save session
-  ferret copart check  [-cookies path]               verify saved session
+  ferret copart login   [-headless] [-cookies path]                     login and save session
+  ferret copart check   [-cookies path]                                 verify saved session
+  ferret copart search  [-makes A,B] [-year-min N] [-odo-max N]        search lots
+                        [-days N] [-damage CODE] [-title CODE]
+                        [-pages N] [-out file.json]
 
 Credentials are read from env vars or .env file:
   COPART_EMAIL, COPART_PASSWORD`)

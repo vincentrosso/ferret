@@ -44,7 +44,7 @@ func (b *Browser) NewPage(url string) (*rod.Page, error) {
 	if err != nil {
 		return nil, err
 	}
-	page = page.Timeout(b.opts.Timeout)
+	// No blanket timeout — scrapers are long-running; use per-operation timeouts instead.
 
 	if b.opts.UserAgent != "" {
 		if err := page.SetUserAgent(&proto.NetworkSetUserAgentOverride{

@@ -43,7 +43,7 @@ func (s *Scraper) Login(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("open homepage: %w", err)
 	}
-	defer page.MustClose()
+	defer page.Close() //nolint:errcheck
 
 	slog.Info("waiting for homepage to load...")
 	if err := page.WaitLoad(); err != nil {
@@ -160,7 +160,7 @@ func (s *Scraper) IsLoggedIn(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer page.MustClose()
+	defer page.Close() //nolint:errcheck
 
 	// Wait up to 15s for the page to settle, then check URL.
 	page.Timeout(15 * time.Second).WaitLoad() //nolint: errcheck — timeout is fine
@@ -176,9 +176,166 @@ func (s *Scraper) IsLoggedIn(ctx context.Context) (bool, error) {
 	return err == nil, nil
 }
 
-// Search implements scraper.Scraper — stub until search is built.
-func (s *Scraper) Search(_ context.Context, _ *rod.Page, _ scraper.Query) ([]string, error) {
-	return nil, fmt.Errorf("Search not yet implemented")
+// RunSearch navigates to a pre-filtered Copart search URL and paginates through results.
+func (s *Scraper) RunSearch(ctx context.Context, params SearchParams) ([]Lot, error) {
+	searchURL, err := params.BuildURL()
+	if err != nil {
+		return nil, fmt.Errorf("build url: %w", err)
+	}
+
+	page, err := s.br.NewPage(searchURL)
+	if err != nil {
+		return nil, fmt.Errorf("open search page: %w", err)
+	}
+	defer page.Close() //nolint:errcheck
+
+	slog.Info("search", "makes", params.Makes, "yearMin", params.YearMin, "odoMax", params.OdoMax)
+
+	// Wait for Angular to populate the table
+	rowSel := `table tbody tr`
+	if _, err := page.Timeout(30 * time.Second).Element(rowSel); err != nil {
+		return nil, fmt.Errorf("no results table after 30s — may need to re-login: %w", err)
+	}
+	time.Sleep(1500 * time.Millisecond) // let all rows render
+
+	var lots []Lot
+	seen := map[string]bool{}
+
+	for pageNum := 1; ; pageNum++ {
+		if params.MaxPages > 0 && pageNum > params.MaxPages {
+			break
+		}
+
+		pageLots, err := extractRows(ctx, page, seen)
+		if err != nil {
+			slog.Warn("row extraction error", "page", pageNum, "err", err)
+		}
+		slog.Info("page scraped", "page", pageNum, "lots", len(pageLots), "total", len(lots)+len(pageLots))
+		lots = append(lots, pageLots...)
+
+		if !nextPage(page) {
+			break
+		}
+		// Wait for new rows to replace the old ones
+		time.Sleep(2 * time.Second)
+	}
+
+	return lots, nil
+}
+
+// extractRows pulls all lot rows from the current page state.
+func extractRows(_ context.Context, page *rod.Page, seen map[string]bool) ([]Lot, error) {
+	rows, err := page.Elements(`table tbody tr`)
+	if err != nil || len(rows) == 0 {
+		// Fallback: any row containing a /lot/ link
+		rows, err = page.Elements(`tr`)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	now := time.Now()
+	var lots []Lot
+
+	for _, row := range rows {
+		link, err := row.Element(`a[href*="/lot/"]`)
+		if err != nil {
+			continue
+		}
+		lotURL, _ := link.Attribute("href")
+		if lotURL == nil || *lotURL == "" {
+			continue
+		}
+		if seen[*lotURL] {
+			continue
+		}
+		seen[*lotURL] = true
+
+		// Build absolute URL if needed
+		href := *lotURL
+		if !strings.HasPrefix(href, "http") {
+			href = baseURL + href
+		}
+
+		// Collect cell texts
+		cells, _ := row.Elements(`td`)
+		cellTexts := make([]string, len(cells))
+		for i, c := range cells {
+			if t, err := c.Text(); err == nil {
+				cellTexts[i] = t
+			}
+		}
+
+		lot, ok := parseLotRow(href, cellTexts, now)
+		if !ok {
+			continue
+		}
+
+		// Thumbnail
+		if img, err := row.Element(`img`); err == nil {
+			if src, err := img.Attribute("src"); err == nil && src != nil && *src != "" {
+				lot.ThumbnailURL = *src
+			} else if ds, err := img.Attribute("data-src"); err == nil && ds != nil {
+				lot.ThumbnailURL = *ds
+			}
+		}
+
+		lots = append(lots, lot)
+	}
+	return lots, nil
+}
+
+// nextPage clicks the "Next" pagination button. Returns false when there is none.
+// All element lookups use a short timeout so we don't hang on missing elements.
+func nextPage(page *rod.Page) bool {
+	const lookupTimeout = 2 * time.Second
+	selectors := []string{
+		`[aria-label="Next page"]`,
+		`[aria-label="Next"]`,
+		`li.next a`,
+		`button[class*="next"]`,
+		`a[class*="next"]`,
+	}
+	for _, sel := range selectors {
+		el, err := page.Timeout(lookupTimeout).Element(sel)
+		if err != nil {
+			continue
+		}
+		disabled, _ := el.Attribute("disabled")
+		ariaDisabled, _ := el.Attribute("aria-disabled")
+		if disabled != nil || (ariaDisabled != nil && *ariaDisabled == "true") {
+			return false
+		}
+		if err := el.Click(proto.InputMouseButtonLeft, 1); err == nil {
+			return true
+		}
+	}
+	// XPath fallback
+	el, err := page.Timeout(lookupTimeout).ElementX(
+		`//button[normalize-space(text())='Next'] | //a[normalize-space(text())='Next']`,
+	)
+	if err != nil {
+		return false
+	}
+	disabled, _ := el.Attribute("disabled")
+	if disabled != nil {
+		return false
+	}
+	return el.Click(proto.InputMouseButtonLeft, 1) == nil
+}
+
+// Search implements scraper.Scraper (generic interface).
+func (s *Scraper) Search(ctx context.Context, _ *rod.Page, q scraper.Query) ([]string, error) {
+	params := SearchParams{MaxPages: q.MaxPages}
+	lots, err := s.RunSearch(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	urls := make([]string, len(lots))
+	for i, l := range lots {
+		urls[i] = l.LotURL
+	}
+	return urls, nil
 }
 
 // Detail implements scraper.Scraper — stub until detail parsing is built.
