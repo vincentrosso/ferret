@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,12 +17,17 @@ import (
 	"time"
 
 	"github.com/vincentrosso/ferret/internal/browser"
+	"github.com/vincentrosso/ferret/internal/server"
 	"github.com/vincentrosso/ferret/scrapers/copart"
 	"github.com/vincentrosso/ferret/store"
 )
 
 func main() {
-	if len(os.Args) < 3 {
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(1)
+	}
+	if len(os.Args) < 3 && os.Args[1] != "serve" {
 		usage()
 		os.Exit(1)
 	}
@@ -30,6 +36,11 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	if os.Args[1] == "serve" {
+		runServe(ctx, os.Args[2:])
+		return
+	}
 
 	switch os.Args[1] + " " + os.Args[2] {
 	case "copart login":
@@ -139,6 +150,31 @@ func runCopartSearch(ctx context.Context, args []string) {
 	enc.Encode(lots)
 	if *outFile != "" {
 		fmt.Fprintf(os.Stderr, "wrote %d lots to %s\n", len(lots), *outFile)
+	}
+}
+
+func runServe(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	port := fs.String("port", "7777", "port to listen on")
+	dataDir := fs.String("data", "data", "data directory")
+	fs.Parse(args)
+
+	srv, err := server.New(*dataDir)
+	if err != nil {
+		fatal("init server", err)
+	}
+
+	addr := ":" + *port
+	slog.Info("serving", "url", "http://localhost:"+*port)
+
+	httpSrv := &http.Server{Addr: addr, Handler: srv.Handler()}
+	go func() {
+		<-ctx.Done()
+		httpSrv.Shutdown(context.Background()) //nolint:errcheck
+	}()
+
+	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		fatal("listen", err)
 	}
 }
 
