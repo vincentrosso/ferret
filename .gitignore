@@ -1,0 +1,4 @@
+ferret
+/data/
+*.log
+.env
