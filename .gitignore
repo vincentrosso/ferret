@@ -1,4 +1,4 @@
-ferret
+/ferret
 /data/
 *.log
 .env
