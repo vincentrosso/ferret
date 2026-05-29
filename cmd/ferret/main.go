@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -214,7 +215,12 @@ func runCopartDetail(ctx context.Context, args []string) {
 			}
 
 			for j := range jobs {
-				detail, err := sc.ScrapeDetail(ctx, j.url)
+				imgDir := ""
+				if *images {
+					imgDir = filepath.Join(*dataDir, "images")
+				}
+
+				detail, err := sc.ScrapeDetail(ctx, j.url, imgDir)
 				if err != nil {
 					slog.Error("detail failed", "url", j.url, "err", err)
 					mu.Lock()
@@ -228,15 +234,7 @@ func runCopartDetail(ctx context.Context, args []string) {
 					slog.Error("save JSON", "lot", detail.LotNumber, "err", err)
 				} else {
 					slog.Info("saved", "lot", detail.LotNumber, "path", path,
-						"vin", detail.VIN, "images", len(detail.ImageURLs))
-				}
-
-				if *images && len(detail.ImageURLs) > 0 {
-					paths, err := st.DownloadImages(ctx, detail.LotNumber, detail.ImageURLs)
-					if err != nil {
-						slog.Warn("image download partial", "lot", detail.LotNumber, "err", err)
-					}
-					slog.Info("images downloaded", "lot", detail.LotNumber, "count", len(paths))
+						"vin", detail.VIN, "zip", detail.ImageZip)
 				}
 
 				mu.Lock()

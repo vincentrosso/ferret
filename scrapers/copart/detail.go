@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,6 +37,7 @@ type DetailResult struct {
 	ExteriorCondition  []DamageItem `json:"exterior_condition,omitempty"`
 	VehicleDetailsText string       `json:"vehicle_details_text,omitempty"`
 	ImageURLs          []string     `json:"image_urls,omitempty"`
+	ImageZip           string       `json:"image_zip,omitempty"`
 	CurrentBid         float64      `json:"current_bid,omitempty"`
 	FinalBid           float64      `json:"final_bid,omitempty"`
 	SaleStatus         string       `json:"sale_status,omitempty"`
@@ -74,7 +77,9 @@ var (
 )
 
 // ScrapeDetail navigates to a lot detail page and extracts all available fields.
-func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string) (*DetailResult, error) {
+// If imageDir is non-empty, it clicks Copart's "Download Image" button and saves
+// the resulting ZIP to imageDir/<lotNumber>.zip (unextracted).
+func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir string) (*DetailResult, error) {
 	lotM := reLotNum.FindStringSubmatch(lotURL)
 	if len(lotM) < 2 {
 		return nil, fmt.Errorf("could not extract lot number from %s", lotURL)
@@ -227,9 +232,105 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string) (*DetailResul
 		}
 	}
 
-	res.ImageURLs = scrapeImageURLs(page)
+	// ── image download ────────────────────────────────────────────────────
+
+	if imageDir != "" {
+		if err := os.MkdirAll(imageDir, 0o755); err == nil {
+			if zipPath, err := clickDownloadImages(s.br.Rod(), page, imageDir, lotM[1]); err != nil {
+				slog.Warn("image download failed", "lot", lotM[1], "err", err)
+			} else {
+				res.ImageZip = zipPath
+				slog.Info("images downloaded", "lot", lotM[1], "zip", zipPath)
+			}
+		}
+	}
 
 	return res, nil
+}
+
+// clickDownloadImages clicks the "Download Image" button (and any overlay that appears),
+// waits for the ZIP download to complete, and renames it to <lotNumber>.zip.
+func clickDownloadImages(br *rod.Browser, page *rod.Page, dir, lotNumber string) (string, error) {
+	btn, err := page.Timeout(10 * time.Second).Element(`#downloadImageBtn`)
+	if err != nil {
+		return "", fmt.Errorf("download button not found: %w", err)
+	}
+
+	// Scroll the button into view first
+	btn.MustScrollIntoView()
+	time.Sleep(300 * time.Millisecond)
+
+	// First click — may open an overlay/dropdown with options
+	if err := btn.Click(proto.InputMouseButtonLeft, 1); err != nil {
+		return "", fmt.Errorf("click download button: %w", err)
+	}
+	time.Sleep(800 * time.Millisecond)
+
+	// Look for a "Download" or "All" option inside the overlay that appeared
+	overlaySelectors := []string{
+		`[class*="download-op"] li`,
+		`[class*="download-op"] a`,
+		`[class*="download-op"] button`,
+		`.p-overlaypanel li`,
+		`.p-overlaypanel a`,
+		`[styleclass="download-op-block"] li`,
+	}
+	for _, sel := range overlaySelectors {
+		items, err := page.Elements(sel)
+		if err != nil || len(items) == 0 {
+			continue
+		}
+		// Register download handler before triggering the actual download
+		wait := br.WaitDownload(dir)
+		// Click the first item (usually "Download All" or the only option)
+		if err := items[0].Click(proto.InputMouseButtonLeft, 1); err != nil {
+			continue
+		}
+		// Wait with a 60s ceiling via a channel race
+		type result struct {
+			info *proto.PageDownloadWillBegin
+		}
+		ch := make(chan result, 1)
+		go func() { ch <- result{wait()} }()
+
+		select {
+		case r := <-ch:
+			if r.info == nil {
+				return "", fmt.Errorf("download completed but info was nil")
+			}
+			downloaded := filepath.Join(dir, r.info.GUID)
+			dest := filepath.Join(dir, lotNumber+".zip")
+			if err := os.Rename(downloaded, dest); err != nil {
+				if _, statErr := os.Stat(dest); statErr == nil {
+					return dest, nil
+				}
+				return downloaded, nil
+			}
+			return dest, nil
+		case <-time.After(60 * time.Second):
+			return "", fmt.Errorf("download timed out after 60s")
+		}
+	}
+
+	// Fallback: maybe the first click DID trigger the download directly (no overlay)
+	wait := br.WaitDownload(dir)
+	// Re-click the button
+	btn.Click(proto.InputMouseButtonLeft, 1) //nolint:errcheck
+
+	ch := make(chan *proto.PageDownloadWillBegin, 1)
+	go func() { ch <- wait() }()
+	select {
+	case info := <-ch:
+		if info == nil {
+			return "", fmt.Errorf("fallback download: nil info")
+		}
+		downloaded := filepath.Join(dir, info.GUID)
+		dest := filepath.Join(dir, lotNumber+".zip")
+		os.Rename(downloaded, dest) //nolint:errcheck
+		return dest, nil
+	case <-time.After(30 * time.Second):
+		return "", fmt.Errorf("fallback download timed out")
+	}
 }
 
 // domValue finds dt/th/label elements matching any key and returns the adjacent value.
