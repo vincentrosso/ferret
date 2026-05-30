@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"runtime"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -33,10 +34,13 @@ func New(opts Options) (*Browser, error) {
 
 	l := launcher.New().
 		Headless(opts.Headless).
-		// Remove the "--enable-automation" flag Chrome adds by default.
-		// This flag is the primary signal anti-bot systems check.
 		Set("disable-blink-features", "AutomationControlled").
 		Delete("enable-automation")
+
+	// Required when running as root on Linux (VPS/server).
+	if runtime.GOOS == "linux" {
+		l = l.Set("no-sandbox", "")
+	}
 
 	if opts.ProxyURL != "" {
 		l = l.Proxy(opts.ProxyURL)

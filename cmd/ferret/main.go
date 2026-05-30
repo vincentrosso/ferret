@@ -11,12 +11,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/vincentrosso/ferret/internal/browser"
+	"github.com/vincentrosso/ferret/internal/damage"
+	"github.com/vincentrosso/ferret/internal/report"
+	"github.com/vincentrosso/ferret/internal/scoring"
 	"github.com/vincentrosso/ferret/internal/server"
 	"github.com/vincentrosso/ferret/scrapers/copart"
 	"github.com/vincentrosso/ferret/store"
@@ -51,6 +55,10 @@ func main() {
 		runCopartSearch(ctx, os.Args[3:])
 	case "copart detail":
 		runCopartDetail(ctx, os.Args[3:])
+	case "copart analyze":
+		runCopartAnalyze(ctx, os.Args[3:])
+	case "copart report":
+		runCopartReport(os.Args[3:])
 	default:
 		usage()
 		os.Exit(1)
@@ -85,11 +93,11 @@ func runCopartLogin(ctx context.Context, args []string) {
 
 func runCopartSearch(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("copart search", flag.ExitOnError)
-	makes := fs.String("makes", "HONDA,TOYOTA,NISSAN,CHEVROLET,ACURA", "comma-separated makes")
+	makes := fs.String("makes", "TOYOTA,HONDA,LEXUS", "comma-separated makes")
 	yearMin := fs.Int("year-min", 0, "minimum model year (default: 4 years ago)")
 	yearMax := fs.Int("year-max", 0, "maximum model year (default: current year + 2)")
 	odoMax := fs.Int("odo-max", 85_000, "max odometer miles")
-	daysAhead := fs.Int("days", 14, "auction date window: today + N days")
+	daysAhead := fs.Int("days", 5, "auction date window: today + N days")
 	damage := fs.String("damage", "DAMAGECODE_HL", "damage type code")
 	title := fs.String("title", "C", "title groups: C (clean), S (salvage), or C,S for both")
 	maxPages := fs.Int("pages", 0, "max pages to scrape (0 = unlimited)")
@@ -132,10 +140,10 @@ func runCopartSearch(ctx context.Context, args []string) {
 	if err != nil {
 		fatal("search", err)
 	}
-	slog.Info("search complete", "total_lots", len(lots))
 
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
+	ranked := scoring.RankAll(lots)
+	slog.Info("search complete", "total_lots", len(ranked))
+
 	out := os.Stdout
 	if *outFile != "" {
 		f, err := os.Create(*outFile)
@@ -144,12 +152,12 @@ func runCopartSearch(ctx context.Context, args []string) {
 		}
 		defer f.Close()
 		out = f
-		enc = json.NewEncoder(out)
-		enc.SetIndent("", "  ")
 	}
-	enc.Encode(lots)
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	enc.Encode(ranked)
 	if *outFile != "" {
-		fmt.Fprintf(os.Stderr, "wrote %d lots to %s\n", len(lots), *outFile)
+		fmt.Fprintf(os.Stderr, "wrote %d ranked lots to %s\n", len(ranked), *outFile)
 	}
 }
 
@@ -284,6 +292,145 @@ func runCopartDetail(ctx context.Context, args []string) {
 	slog.Info("detail scrape complete", "ok", succeeded, "failed", failed)
 }
 
+func runCopartAnalyze(_ context.Context, args []string) {
+	fs := flag.NewFlagSet("copart analyze", flag.ExitOnError)
+	inFile := fs.String("in", "lots-ranked.json", "ranked lots JSON from 'copart search'")
+	dataDir := fs.String("data", "data", "data directory (for raw/ and images/)")
+	outFile := fs.String("out", "lots-analyzed.json", "output file with scores + damage")
+	fs.Parse(args)
+
+	apiKey := mustEnv("ANTHROPIC_API_KEY")
+	az := damage.New(apiKey)
+
+	f, err := os.Open(*inFile)
+	if err != nil {
+		fatal("open input", err)
+	}
+	var ranked []scoring.RankedLot
+	if err := json.NewDecoder(f).Decode(&ranked); err != nil {
+		fatal("decode input", err)
+	}
+	f.Close()
+
+	type AnalyzedLot struct {
+		scoring.RankedLot
+		Damage *damage.Report `json:"damage,omitempty"`
+	}
+
+	results := make([]AnalyzedLot, len(ranked))
+	for i, lot := range ranked {
+		zipPath := filepath.Join(*dataDir, "images", lot.LotNumber+".zip")
+		reportPath := filepath.Join(*dataDir, "raw", lot.LotNumber, "damage_report.json")
+
+		al := AnalyzedLot{RankedLot: lot}
+
+		// Load cached report if present
+		var report *damage.Report
+		if rb, err := os.ReadFile(reportPath); err == nil {
+			var r damage.Report
+			if json.Unmarshal(rb, &r) == nil {
+				report = &r
+			}
+		}
+
+		// Run analysis if no cached report and zip exists
+		if report == nil {
+			if _, err := os.Stat(zipPath); err == nil {
+				r, err := az.Analyze(lot.LotNumber, zipPath)
+				if err != nil {
+					slog.Warn("analyze failed", "lot", lot.LotNumber, "err", err)
+				} else {
+					report = r
+					// Cache it
+					if rb, err := json.MarshalIndent(r, "", "  "); err == nil {
+						os.WriteFile(reportPath, rb, 0o644) //nolint:errcheck
+					}
+					slog.Info("analyzed", "lot", lot.LotNumber, "severity", r.Severity,
+						"cost", fmt.Sprintf("$%d–$%d", r.RepairCostLow, r.RepairCostHigh))
+				}
+			} else {
+				slog.Warn("no zip found, skipping vision", "lot", lot.LotNumber)
+			}
+		} else {
+			slog.Info("cached report", "lot", lot.LotNumber, "severity", report.Severity)
+		}
+
+		al.Damage = report
+
+		// Re-score with damage severity
+		severity := ""
+		if report != nil {
+			severity = report.Severity
+		}
+		al.Score = scoring.RankWithDamage(lot.Lot, severity)
+		results[i] = al
+	}
+
+	// Sort best-first by updated score
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score.Total > results[j].Score.Total
+	})
+
+	out, err := os.Create(*outFile)
+	if err != nil {
+		fatal("create output", err)
+	}
+	defer out.Close()
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	enc.Encode(results)
+	fmt.Fprintf(os.Stderr, "wrote %d analyzed lots to %s\n", len(results), *outFile)
+}
+
+func runCopartReport(args []string) {
+	fs := flag.NewFlagSet("copart report", flag.ExitOnError)
+	inFile := fs.String("in", "lots-analyzed.json", "analyzed lots JSON from 'copart analyze'")
+	outDir := fs.String("out-dir", "reports", "directory to write HTML reports")
+	topN := fs.Int("top", 10, "number of top lots to include")
+	fs.Parse(args)
+
+	f, err := os.Open(*inFile)
+	if err != nil {
+		fatal("open input", err)
+	}
+	defer f.Close()
+
+	type analyzedLot struct {
+		scoring.RankedLot
+		Damage *damage.Report `json:"damage,omitempty"`
+	}
+	var raw []analyzedLot
+	if err := json.NewDecoder(f).Decode(&raw); err != nil {
+		fatal("decode input", err)
+	}
+
+	n := *topN
+	if n > len(raw) {
+		n = len(raw)
+	}
+
+	lots := make([]report.Lot, n)
+	for i, al := range raw[:n] {
+		lots[i] = report.Lot{
+			RankedLot: al.RankedLot,
+			Damage:    al.Damage,
+		}
+		if al.Damage != nil {
+			bid := int(al.CurrentBid)
+			lots[i].TotalCostLow = bid + al.Damage.RepairCostLow
+			lots[i].TotalCostHigh = bid + al.Damage.RepairCostHigh
+		}
+	}
+
+	date := time.Now().Format("2006-01-02")
+	outPath := filepath.Join(*outDir, date+".html")
+	if err := report.Generate(lots, outPath); err != nil {
+		fatal("generate report", err)
+	}
+	fmt.Fprintf(os.Stderr, "report saved to %s\n", outPath)
+	fmt.Println(outPath)
+}
+
 func runCopartCheck(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("copart check", flag.ExitOnError)
 	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
@@ -344,6 +491,7 @@ Usage:
                         [-pages N] [-out file.json]
   ferret copart detail  -lot NUMBER | -from search.json                 scrape lot details
                         [-workers N] [-data dir] [-images=false]
+  ferret copart analyze [-in lots-ranked.json] [-data dir] [-out lots-analyzed.json]
 
 Credentials are read from env vars or .env file:
   COPART_EMAIL, COPART_PASSWORD`)

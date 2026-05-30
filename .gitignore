@@ -1,4 +1,7 @@
 /ferret
 /data/
+/reports/
+/logs/
 *.log
 .env
+lots*.json

@@ -18,7 +18,7 @@ type SearchParams struct {
 	YearMax    int       // inclusive; defaults to current year + 2
 	OdoMax     int       // max odometer; defaults to 85 000
 	DateFrom   time.Time // auction start; defaults to today
-	DateTo     time.Time // auction end; defaults to today + 14 days
+	DateTo     time.Time // auction end; defaults to today + 5 days
 	DamageCode  string   // Copart filter code; defaults to DAMAGECODE_HL (hail)
 	TitleGroups []string // one or more title group codes; defaults to [TITLEGROUP_C]
 	             	     // known values: TITLEGROUP_C (clean), TITLEGROUP_S (salvage)
@@ -29,7 +29,7 @@ type SearchParams struct {
 func (p *SearchParams) defaults() {
 	now := time.Now()
 	if len(p.Makes) == 0 {
-		p.Makes = []string{"HONDA", "TOYOTA", "NISSAN", "CHEVROLET", "ACURA"}
+		p.Makes = []string{"TOYOTA", "HONDA", "LEXUS"}
 	}
 	if p.YearMin == 0 {
 		p.YearMin = now.Year() - 4
@@ -44,7 +44,7 @@ func (p *SearchParams) defaults() {
 		p.DateFrom = now
 	}
 	if p.DateTo.IsZero() {
-		p.DateTo = now.AddDate(0, 0, 14)
+		p.DateTo = now.AddDate(0, 0, 5)
 	}
 	if p.DamageCode == "" {
 		p.DamageCode = "DAMAGECODE_HL"
