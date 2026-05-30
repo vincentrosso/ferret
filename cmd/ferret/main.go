@@ -411,12 +411,24 @@ func runCopartReport(args []string) {
 
 	lots := make([]report.Lot, n)
 	for i, al := range raw[:n] {
+		bid := int(al.CurrentBid)
+		repairMid := 0
+		if al.Damage != nil {
+			repairMid = (al.Damage.RepairCostLow + al.Damage.RepairCostHigh) / 2
+		}
+
+		resale := scoring.EstimateResale(al.Year, al.Make, al.Model, al.Odometer)
+		maxBid := scoring.MaxBid(resale, repairMid, 0.50)
+		roiAt80 := scoring.ROIPercent(maxBid*80/100, repairMid, resale)
+
 		lots[i] = report.Lot{
-			RankedLot: al.RankedLot,
-			Damage:    al.Damage,
+			RankedLot:  al.RankedLot,
+			Damage:     al.Damage,
+			EstResale:  resale,
+			MaxBid:     maxBid,
+			ROIAt80Pct: roiAt80,
 		}
 		if al.Damage != nil {
-			bid := int(al.CurrentBid)
 			lots[i].TotalCostLow = bid + al.Damage.RepairCostLow
 			lots[i].TotalCostHigh = bid + al.Damage.RepairCostHigh
 		}

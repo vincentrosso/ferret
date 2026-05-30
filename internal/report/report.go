@@ -18,6 +18,9 @@ type Lot struct {
 	Damage        *damage.Report
 	TotalCostLow  int
 	TotalCostHigh int
+	EstResale     int
+	MaxBid        int // max bid for 50% ROI
+	ROIAt80Pct    int // ROI% if bid at 80% of MaxBid
 }
 
 // Generate writes a top-N HTML report to outPath.
@@ -103,6 +106,7 @@ var funcMap = template.FuncMap{
 	"join":          strings.Join,
 	"add1":          func(i int) int { return i + 1 },
 	"ftoi":          func(f float64) int { return int(f) },
+	"ge":            func(a, b int) bool { return a >= b },
 }
 
 var tmpl = template.Must(template.New("report").Funcs(funcMap).Parse(htmlTemplate))
@@ -142,9 +146,14 @@ h1 { font-size: 1.4rem; font-weight: 700; color: #f8fafc; margin-bottom: 4px; }
 .bar-track { flex: 1; background: #0f172a; border-radius: 3px; height: 5px; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 3px; background: #3b82f6; }
 .bar-num { width: 20px; text-align: right; font-size: 0.62rem; color: #64748b; flex-shrink: 0; }
-.total-in { padding: 10px 14px; background: #0f172a; border-top: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
-.total-label { font-size: 0.7rem; color: #64748b; }
-.total-value { font-size: 0.95rem; font-weight: 700; color: #22c55e; }
+.financials { padding: 10px 14px; background: #0f172a; border-top: 1px solid #334155; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.fin-item { display: flex; flex-direction: column; }
+.fin-label { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; margin-bottom: 1px; }
+.fin-value { font-size: 0.9rem; font-weight: 700; }
+.fin-green { color: #22c55e; }
+.fin-blue { color: #60a5fa; }
+.fin-amber { color: #f59e0b; }
+.fin-red { color: #ef4444; }
 </style>
 </head>
 <body>
@@ -220,10 +229,24 @@ h1 { font-size: 1.4rem; font-weight: 700; color: #f8fafc; margin-bottom: 4px; }
     <div class="bar-row"><span class="bar-label">model</span><div class="bar-track"><div class="bar-fill" style="width:{{pct $l.Score.ModelTier 5}}%"></div></div><span class="bar-num">{{$l.Score.ModelTier}}</span></div>
   </div>
 
-  {{- if $l.TotalCostLow}}
-  <div class="total-in">
-    <span class="total-label">Est. total in (bid + repair)</span>
-    <span class="total-value">{{dollar $l.TotalCostLow}} – {{dollar $l.TotalCostHigh}}</span>
+  {{- if $l.MaxBid}}
+  <div class="financials">
+    <div class="fin-item">
+      <span class="fin-label">Est. Resale</span>
+      <span class="fin-value fin-blue">{{dollar $l.EstResale}}</span>
+    </div>
+    <div class="fin-item">
+      <span class="fin-label">Max Bid (50% ROI)</span>
+      <span class="fin-value fin-amber">{{dollar $l.MaxBid}}</span>
+    </div>
+    <div class="fin-item">
+      <span class="fin-label">Total In (bid + repair)</span>
+      <span class="fin-value fin-green">{{dollar $l.TotalCostLow}} – {{dollar $l.TotalCostHigh}}</span>
+    </div>
+    <div class="fin-item">
+      <span class="fin-label">ROI @ 80% Max Bid</span>
+      <span class="fin-value {{if ge $l.ROIAt80Pct 50}}fin-green{{else if ge $l.ROIAt80Pct 25}}fin-amber{{else}}fin-red{{end}}">{{$l.ROIAt80Pct}}%</span>
+    </div>
   </div>
   {{- end}}
 </div>
