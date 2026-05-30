@@ -1,9 +1,12 @@
 package copart
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -236,8 +239,20 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 
 	if imageDir != "" {
 		if err := os.MkdirAll(imageDir, 0o755); err == nil {
-			if zipPath, err := clickDownloadImages(s.br.Rod(), page, imageDir, lotM[1]); err != nil {
-				slog.Warn("image download failed", "lot", lotM[1], "err", err)
+			zipPath, err := clickDownloadImages(s.br.Rod(), page, imageDir, lotM[1])
+			if err != nil {
+				slog.Warn("button download failed, trying URL fallback", "lot", lotM[1], "err", err)
+				urls := scrapeImageURLs(page)
+				if len(urls) > 0 {
+					if zipPath2, err2 := downloadURLsToZip(urls, imageDir, lotM[1]); err2 != nil {
+						slog.Warn("URL image download also failed", "lot", lotM[1], "err", err2)
+					} else {
+						res.ImageZip = zipPath2
+						slog.Info("images downloaded via URL fallback", "lot", lotM[1], "zip", zipPath2, "count", len(urls))
+					}
+				} else {
+					slog.Warn("no image URLs found on page", "lot", lotM[1])
+				}
 			} else {
 				res.ImageZip = zipPath
 				slog.Info("images downloaded", "lot", lotM[1], "zip", zipPath)
@@ -426,6 +441,58 @@ func scrapeImageURLs(page *rod.Page) []string {
 		}
 	}
 	return out
+}
+
+// downloadURLsToZip fetches image URLs one-by-one and writes them into a ZIP archive.
+// Used as fallback when the Copart "Download Images" button is unavailable (e.g. VPS IPs).
+func downloadURLsToZip(urls []string, dir, lotNumber string) (string, error) {
+	dest := filepath.Join(dir, lotNumber+".zip")
+	f, err := os.Create(dest)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	zw := zip.NewWriter(f)
+	defer zw.Close()
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	written := 0
+	for i, u := range urls {
+		req, err := http.NewRequest(http.MethodGet, u, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+		req.Header.Set("Referer", "https://www.copart.com/")
+
+		resp, err := client.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			continue
+		}
+
+		name := fmt.Sprintf("%s_Image_%d.jpg", lotNumber, i+1)
+		w, err := zw.Create(name)
+		if err != nil {
+			resp.Body.Close()
+			continue
+		}
+		if _, err := io.Copy(w, resp.Body); err != nil {
+			resp.Body.Close()
+			continue
+		}
+		resp.Body.Close()
+		written++
+	}
+
+	if written == 0 {
+		os.Remove(dest)
+		return "", fmt.Errorf("all %d image URLs failed to download", len(urls))
+	}
+	return dest, nil
 }
 
 // ── small helpers ─────────────────────────────────────────────────────────
