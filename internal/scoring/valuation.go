@@ -4,15 +4,30 @@ import (
 	"strings"
 )
 
-// EstimateResale returns a conservative post-repair private-party resale value
-// for the OC market based on make/model/year/mileage.
-func EstimateResale(year int, make, model string, odo int) int {
+// Comps is a minimal interface so valuation doesn't import the market package.
+type Comps interface {
+	Lookup(make, modelPrefix string) int
+}
+
+// EstimateResale returns a conservative post-repair private-party resale value.
+// If comps is non-nil and has a match, it uses live market data; otherwise falls
+// back to the hardcoded table.
+func EstimateResale(year int, make, model string, odo int, comps Comps) int {
+	// Try live comps first — use first word of model as lookup key
+	if comps != nil {
+		modelKey := strings.ToUpper(strings.Fields(model)[0])
+		if p := comps.Lookup(make, modelKey); p > 0 {
+			return applyAgeOdoAdj(p, year, odo)
+		}
+	}
 	base := baseResale(strings.ToUpper(make), strings.ToUpper(model))
 	if base == 0 {
 		return 0
 	}
+	return applyAgeOdoAdj(base, year, odo)
+}
 
-	// 12% depreciation per year of age (capped at 6 years)
+func applyAgeOdoAdj(base, year, odo int) int {
 	age := 2026 - year
 	if age < 0 {
 		age = 0
@@ -21,12 +36,9 @@ func EstimateResale(year int, make, model string, odo int) int {
 		age = 6
 	}
 	resale := int(float64(base) * (1.0 - float64(age)*0.12))
-
-	// -$400 per 10K miles over 20K
 	if odo > 20_000 {
 		resale -= ((odo - 20_000) / 10_000) * 400
 	}
-
 	if resale < 8_000 {
 		resale = 8_000
 	}

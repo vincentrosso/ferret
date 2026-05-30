@@ -23,6 +23,7 @@ import (
 	"github.com/vincentrosso/ferret/internal/scoring"
 	"github.com/vincentrosso/ferret/internal/server"
 	"github.com/vincentrosso/ferret/scrapers/copart"
+	"github.com/vincentrosso/ferret/scrapers/market"
 	"github.com/vincentrosso/ferret/store"
 )
 
@@ -59,6 +60,8 @@ func main() {
 		runCopartAnalyze(ctx, os.Args[3:])
 	case "copart report":
 		runCopartReport(os.Args[3:])
+	case "market scrape":
+		runMarketScrape(ctx, os.Args[3:])
 	default:
 		usage()
 		os.Exit(1)
@@ -382,12 +385,41 @@ func runCopartAnalyze(_ context.Context, args []string) {
 	fmt.Fprintf(os.Stderr, "wrote %d analyzed lots to %s\n", len(results), *outFile)
 }
 
+func runMarketScrape(_ context.Context, args []string) {
+	fs := flag.NewFlagSet("market scrape", flag.ExitOnError)
+	dataDir := fs.String("data", "data", "data directory")
+	fs.Parse(args)
+
+	compsPath := filepath.Join(*dataDir, "market-comps.json")
+	existing := market.Load(compsPath)
+
+	br, err := browser.New(browser.Options{
+		Headless:  true,
+		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	})
+	if err != nil {
+		fatal("launch browser", err)
+	}
+	defer br.Close()
+
+	sc := market.New(br)
+	updated := sc.ScrapeAll(existing)
+
+	if err := updated.Save(compsPath); err != nil {
+		fatal("save comps", err)
+	}
+	fmt.Fprintf(os.Stderr, "saved %d comp entries to %s\n", len(updated), compsPath)
+}
+
 func runCopartReport(args []string) {
 	fs := flag.NewFlagSet("copart report", flag.ExitOnError)
 	inFile := fs.String("in", "lots-analyzed.json", "analyzed lots JSON from 'copart analyze'")
 	outDir := fs.String("out-dir", "reports", "directory to write HTML reports")
+	dataDir := fs.String("data", "data", "data directory (for market-comps.json)")
 	topN := fs.Int("top", 10, "number of top lots to include")
 	fs.Parse(args)
+
+	comps := market.Load(filepath.Join(*dataDir, "market-comps.json"))
 
 	f, err := os.Open(*inFile)
 	if err != nil {
@@ -417,7 +449,11 @@ func runCopartReport(args []string) {
 			repairMid = (al.Damage.RepairCostLow + al.Damage.RepairCostHigh) / 2
 		}
 
-		resale := scoring.EstimateResale(al.Year, al.Make, al.Model, al.Odometer)
+		var compsArg scoring.Comps
+		if len(comps) > 0 {
+			compsArg = comps
+		}
+		resale := scoring.EstimateResale(al.Year, al.Make, al.Model, al.Odometer, compsArg)
 		maxBid := scoring.MaxBid(resale, repairMid, 0.50)
 		roiAt80 := scoring.ROIPercent(maxBid*80/100, repairMid, resale)
 
