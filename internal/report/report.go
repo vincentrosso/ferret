@@ -178,7 +178,10 @@ h1 { font-size: 1.4rem; font-weight: 700; color: #f8fafc; margin-bottom: 4px; }
         {{- end}}
       </div>
       <div class="car-title">{{$l.Year}} {{$l.Make}} {{$l.Model}}</div>
-      <a class="lot-link" href="{{$l.LotURL}}" target="_blank">Lot #{{$l.LotNumber}} ↗</a>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:1px">
+        <a class="lot-link" href="{{$l.LotURL}}" target="_blank">Lot #{{$l.LotNumber}} ↗</a>
+        <a href="lot-{{$l.LotNumber}}.html" style="font-size:0.68rem;color:#4ade80;font-weight:600">Deep Dive →</a>
+      </div>
     </div>
   </div>
 

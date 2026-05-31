@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
@@ -484,7 +485,20 @@ func runCopartReport(args []string) {
 	}
 
 	date := time.Now().Format("2006-01-02")
-	outPath := filepath.Join(*outDir, date+".html")
+	reportFile := date + ".html"
+
+	// Generate per-lot deep-dive pages.
+	for _, lot := range lots {
+		dp := buildDetailPage(lot, *dataDir, reportFile)
+		detailPath := filepath.Join(*outDir, "lot-"+lot.LotNumber+".html")
+		if err := report.GenerateDetail(dp, detailPath); err != nil {
+			slog.Warn("detail page failed", "lot", lot.LotNumber, "err", err)
+		} else {
+			slog.Info("detail page written", "lot", lot.LotNumber)
+		}
+	}
+
+	outPath := filepath.Join(*outDir, reportFile)
 	if err := report.Generate(lots, outPath); err != nil {
 		fatal("generate report", err)
 	}
@@ -578,6 +592,106 @@ func firstImageFromZip(zipPath string) ([]byte, error) {
 		}
 	}
 	return nil, fmt.Errorf("no jpeg found in %s", zipPath)
+}
+
+// allImagesFromZip reads all JPEGs from a zip and returns them as base64 data URIs.
+func allImagesFromZip(zipPath string) []template.URL {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil
+	}
+	defer r.Close()
+
+	var files []*zip.File
+	for _, f := range r.File {
+		name := strings.ToLower(f.Name)
+		if strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".jpeg") {
+			files = append(files, f)
+		}
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+
+	var out []template.URL
+	for _, f := range files {
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			continue
+		}
+		out = append(out, template.URL("data:image/jpeg;base64,"+base64.StdEncoding.EncodeToString(data)))
+	}
+	return out
+}
+
+// detailJSON is the subset of fields we need from data/raw/<lot>/detail.json.
+type detailJSON struct {
+	VIN             string `json:"vin"`
+	EngineType      string `json:"engine_type"`
+	Transmission    string `json:"transmission"`
+	Color           string `json:"color"`
+	BodyStyle       string `json:"body_style"`
+	DriveType       string `json:"drive_type"`
+	FuelType        string `json:"fuel_type"`
+	RunAndDrive     string `json:"run_and_drive"`
+	KeysPresent     string `json:"keys_present"`
+	AirbagsDeployed string `json:"airbags_deployed"`
+	ConditionGrade  string `json:"condition_grade"`
+	LossType        string `json:"loss_type"`
+	SaleDate        string `json:"sale_date"`
+	ExteriorCondition []struct {
+		Panel  string `json:"panel"`
+		Damage string `json:"damage"`
+		Count  string `json:"count"`
+	} `json:"exterior_condition"`
+}
+
+// buildDetailPage assembles a DetailPage for a single lot.
+func buildDetailPage(lot report.Lot, dataDir, reportFile string) report.DetailPage {
+	dp := report.DetailPage{
+		Lot:        lot,
+		ReportPath: reportFile,
+	}
+
+	// Load detail JSON
+	detailPath := filepath.Join(dataDir, "raw", lot.LotNumber, "detail.json")
+	if f, err := os.Open(detailPath); err == nil {
+		var d detailJSON
+		if err := json.NewDecoder(f).Decode(&d); err == nil {
+			dp.VIN = d.VIN
+			dp.EngineType = d.EngineType
+			dp.Transmission = d.Transmission
+			dp.Color = d.Color
+			dp.BodyStyle = d.BodyStyle
+			dp.DriveType = d.DriveType
+			dp.FuelType = d.FuelType
+			dp.RunAndDrive = d.RunAndDrive
+			dp.KeysPresent = d.KeysPresent
+			dp.AirbagsDeployed = d.AirbagsDeployed
+			dp.ConditionGrade = d.ConditionGrade
+			dp.LossType = d.LossType
+			if d.SaleDate != "" {
+				dp.SaleDate = d.SaleDate
+			}
+			for _, p := range d.ExteriorCondition {
+				dp.ExteriorPanels = append(dp.ExteriorPanels, report.PanelItem{
+					Panel:  p.Panel,
+					Damage: p.Damage,
+					Count:  p.Count,
+				})
+			}
+		}
+		f.Close()
+	}
+
+	// Load all images
+	zipPath := filepath.Join(dataDir, "images", lot.LotNumber+".zip")
+	dp.GalleryImages = allImagesFromZip(zipPath)
+
+	return dp
 }
 
 // loadDotEnv reads key=value pairs from path into the process environment.
