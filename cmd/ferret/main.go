@@ -60,6 +60,8 @@ func main() {
 		runCopartSearch(ctx, os.Args[3:])
 	case "copart detail":
 		runCopartDetail(ctx, os.Args[3:])
+	case "copart bid":
+		runCopartBid(ctx, os.Args[3:])
 	case "copart analyze":
 		runCopartAnalyze(ctx, os.Args[3:])
 	case "copart report":
@@ -297,6 +299,55 @@ func runCopartDetail(ctx context.Context, args []string) {
 
 	wg.Wait()
 	slog.Info("detail scrape complete", "ok", succeeded, "failed", failed)
+}
+
+func runCopartBid(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("copart bid", flag.ExitOnError)
+	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
+	fs.Parse(args)
+
+	if len(fs.Args()) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: ferret copart bid <lot_number>")
+		os.Exit(1)
+	}
+	lotNumber := fs.Args()[0]
+
+	email := mustEnv("COPART_EMAIL")
+	password := mustEnv("COPART_PASSWORD")
+
+	br, err := browser.New(browser.Options{
+		Headless: true,
+		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	})
+	if err != nil {
+		fatal("launch browser", err)
+	}
+	defer br.Close()
+
+	sc := copart.New(br, email, password, *cookiePath)
+	if err := sc.LoadSession(ctx); err != nil {
+		slog.Warn("no saved session", "err", err)
+	}
+
+	lotURL := "https://www.copart.com/lot/" + lotNumber
+	detail, err := sc.ScrapeDetail(ctx, lotURL, "") // no image dir → skip download
+	if err != nil {
+		out, _ := json.Marshal(map[string]any{"error": err.Error(), "lot": lotNumber})
+		fmt.Println(string(out))
+		os.Exit(1)
+	}
+
+	out := map[string]any{
+		"lot":         detail.LotNumber,
+		"current_bid": detail.CurrentBid,
+		"sale_date":   detail.SaleDate,
+		"sale_status": detail.SaleStatus,
+		"lot_url":     detail.LotURL,
+		"fetched_at":  time.Now().UTC().Format(time.RFC3339),
+	}
+	b, _ := json.Marshal(out)
+	fmt.Println(string(b))
 }
 
 func runCopartAnalyze(_ context.Context, args []string) {
