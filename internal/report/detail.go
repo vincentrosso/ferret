@@ -322,11 +322,6 @@ a:hover { text-decoration: underline; }
         <a class="btn" href="https://www.carfax.com/vehicle/{{.VIN}}" target="_blank">Carfax ↗</a>
         <a class="btn" href="https://www.autocheck.com/vehiclehistory/autocheck/en/vehiclehistory?vin={{.VIN}}" target="_blank">AutoCheck ↗</a>
         {{- end}}
-        <a class="btn" href="https://www.google.com/search?q={{.Year}}+{{.Make}}+{{.Model}}+value+resale" target="_blank">Market Value ↗</a>
-        <a class="btn" href="https://www.google.com/search?q={{.Year}}+{{.Make}}+{{.Model}}+hail+damage+repair+PDR" target="_blank">PDR Research ↗</a>
-        {{- if .VIN}}
-        <a class="btn" href="https://www.google.com/search?q={{.VIN}}+auction+history" target="_blank">VIN History ↗</a>
-        {{- end}}
       </div>
     </div>
   </div>
