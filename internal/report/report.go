@@ -107,6 +107,7 @@ var funcMap = template.FuncMap{
 	"add1":          func(i int) int { return i + 1 },
 	"ftoi":          func(f float64) int { return int(f) },
 	"ge":            func(a, b int) bool { return a >= b },
+	"safeURL":       func(s string) template.URL { return template.URL(s) },
 }
 
 var tmpl = template.Must(template.New("report").Funcs(funcMap).Parse(htmlTemplate))
@@ -164,7 +165,7 @@ h1 { font-size: 1.4rem; font-weight: 700; color: #f8fafc; margin-bottom: 4px; }
 <div class="card">
   <div class="card-header">
     {{- if $l.ThumbnailURL}}
-    <img class="thumb" src="{{$l.ThumbnailURL}}" alt="{{$l.Title}}" loading="lazy">
+    <img class="thumb" src="{{$l.ThumbnailURL | safeURL}}" alt="{{$l.Title}}" loading="lazy">
     {{- else}}
     <div class="no-thumb">no image</div>
     {{- end}}
