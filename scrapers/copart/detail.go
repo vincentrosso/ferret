@@ -205,12 +205,15 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 	}
 
 	// Only accept a real date (MM/DD/YYYY); ignore status words like "Future"
-	if sd := domValue(page, "sale date", "auction date"); reSaleDate.MatchString(sd) {
-		res.SaleDate = reMatch(reSaleDate, sd, 1)
+	if sd := domValue(page, "sale date", "auction date", "sale information"); sd != "" {
+		if strings.Contains(strings.ToLower(sd), "future") {
+			res.SaleStatus = "future"
+		} else if reSaleDate.MatchString(sd) {
+			res.SaleDate = reMatch(reSaleDate, sd, 1)
+		}
 	}
-	if res.SaleDate == "" {
-		res.SaleDate = reMatch(reSaleDate, bodyText, 1)
-	}
+	// No body-text fallback: reSaleDate against full body finds random dates (listing
+	// history, repair estimates, etc.) that are unrelated to the auction schedule.
 
 	// Fuel / loss fallback from DOM
 	if res.FuelType == "" {

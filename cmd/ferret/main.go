@@ -324,8 +324,28 @@ func runCopartAnalyze(_ context.Context, args []string) {
 		Damage *damage.Report `json:"damage,omitempty"`
 	}
 
-	results := make([]AnalyzedLot, len(ranked))
-	for i, lot := range ranked {
+	var results []AnalyzedLot
+	for _, lot := range ranked {
+		// Skip lots marked "future" (not yet assigned to an auction date).
+		detailPath := filepath.Join(*dataDir, "raw", lot.LotNumber, "detail.json")
+		if f, err := os.Open(detailPath); err == nil {
+			var d struct {
+				SaleStatus string `json:"sale_status"`
+				SaleDate   string `json:"sale_date"`
+			}
+			if json.NewDecoder(f).Decode(&d) == nil {
+				if d.SaleStatus == "future" {
+					slog.Info("skipping future lot", "lot", lot.LotNumber)
+					f.Close()
+					continue
+				}
+				if d.SaleDate != "" {
+					lot.SaleDate = d.SaleDate
+				}
+			}
+			f.Close()
+		}
+
 		zipPath := filepath.Join(*dataDir, "images", lot.LotNumber+".zip")
 		reportPath := filepath.Join(*dataDir, "raw", lot.LotNumber, "damage_report.json")
 
@@ -370,7 +390,7 @@ func runCopartAnalyze(_ context.Context, args []string) {
 			severity = report.Severity
 		}
 		al.Score = scoring.RankWithDamage(lot.Lot, severity)
-		results[i] = al
+		results = append(results, al)
 	}
 
 	// Sort best-first by updated score
@@ -487,14 +507,17 @@ func runCopartReport(args []string) {
 	date := time.Now().Format("2006-01-02")
 	reportFile := date + ".html"
 
-	// Generate per-lot deep-dive pages.
-	for _, lot := range lots {
-		dp := buildDetailPage(lot, *dataDir, reportFile)
-		detailPath := filepath.Join(*outDir, "lot-"+lot.LotNumber+".html")
+	// Generate per-lot deep-dive pages; also backfill SaleDate from detail.json.
+	for i := range lots {
+		dp := buildDetailPage(lots[i], *dataDir, reportFile)
+		if dp.SaleDate != "" {
+			lots[i].SaleDate = dp.SaleDate
+		}
+		detailPath := filepath.Join(*outDir, "lot-"+lots[i].LotNumber+".html")
 		if err := report.GenerateDetail(dp, detailPath); err != nil {
-			slog.Warn("detail page failed", "lot", lot.LotNumber, "err", err)
+			slog.Warn("detail page failed", "lot", lots[i].LotNumber, "err", err)
 		} else {
-			slog.Info("detail page written", "lot", lot.LotNumber)
+			slog.Info("detail page written", "lot", lots[i].LotNumber)
 		}
 	}
 
