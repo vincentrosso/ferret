@@ -148,8 +148,8 @@ a:hover { text-decoration: underline; }
 .bar-lbl { width: 68px; font-size: 0.62rem; color: #64748b; flex-shrink: 0; }
 .bar-track { flex: 1; background: #0f172a; border-radius: 3px; height: 6px; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 3px; background: #3b82f6; }
-.bar-max { width: 26px; font-size: 0.58rem; color: #475569; text-align: right; flex-shrink: 0; }
-.bar-val { width: 20px; font-size: 0.68rem; font-weight: 600; color: #e2e8f0; text-align: right; flex-shrink: 0; }
+.bar-val { width: 48px; font-size: 0.68rem; font-weight: 600; color: #e2e8f0; text-align: right; flex-shrink: 0; }
+.bar-max { font-size: 0.58rem; font-weight: 400; color: #475569; }
 .score-total { float: right; font-size: 1rem; font-weight: 700; color: #60a5fa; }
 
 /* research buttons */
@@ -306,12 +306,12 @@ a:hover { text-decoration: underline; }
   <div class="row2">
     <div class="card">
       <div class="section-label">Score Breakdown <span class="score-total">{{.Score.Total}}/100</span></div>
-      <div class="bar-row"><span class="bar-lbl">Damage</span><div class="bar-track"><div class="bar-fill" style="width:{{pct .Score.Damage 30}}%"></div></div><span class="bar-max">/30</span><span class="bar-val">{{.Score.Damage}}</span></div>
-      <div class="bar-row"><span class="bar-lbl">Make</span><div class="bar-track"><div class="bar-fill" style="width:{{pct .Score.Make 20}}%"></div></div><span class="bar-max">/20</span><span class="bar-val">{{.Score.Make}}</span></div>
-      <div class="bar-row"><span class="bar-lbl">Mileage</span><div class="bar-track"><div class="bar-fill" style="width:{{pct .Score.Mileage 20}}%"></div></div><span class="bar-max">/20</span><span class="bar-val">{{.Score.Mileage}}</span></div>
-      <div class="bar-row"><span class="bar-lbl">Year</span><div class="bar-track"><div class="bar-fill" style="width:{{pct .Score.Year 15}}%"></div></div><span class="bar-max">/15</span><span class="bar-val">{{.Score.Year}}</span></div>
-      <div class="bar-row"><span class="bar-lbl">Bid</span><div class="bar-track"><div class="bar-fill" style="width:{{pct .Score.Bid 10}}%"></div></div><span class="bar-max">/10</span><span class="bar-val">{{.Score.Bid}}</span></div>
-      <div class="bar-row"><span class="bar-lbl">Model Tier</span><div class="bar-track"><div class="bar-fill" style="width:{{pct .Score.ModelTier 5}}%"></div></div><span class="bar-max">/5</span><span class="bar-val">{{.Score.ModelTier}}</span></div>
+      <div class="bar-row"><span class="bar-lbl">Damage</span><div class="bar-track"><div class="bar-fill" style="width:{{pct .Score.Damage 30}}%"></div></div><span class="bar-val">{{.Score.Damage}}<span class="bar-max">/30</span></span></div>
+      <div class="bar-row"><span class="bar-lbl">Make</span><div class="bar-track"><div class="bar-fill" style="width:{{pct .Score.Make 20}}%"></div></div><span class="bar-val">{{.Score.Make}}<span class="bar-max">/20</span></span></div>
+      <div class="bar-row"><span class="bar-lbl">Mileage</span><div class="bar-track"><div class="bar-fill" style="width:{{pct .Score.Mileage 20}}%"></div></div><span class="bar-val">{{.Score.Mileage}}<span class="bar-max">/20</span></span></div>
+      <div class="bar-row"><span class="bar-lbl">Year</span><div class="bar-track"><div class="bar-fill" style="width:{{pct .Score.Year 15}}%"></div></div><span class="bar-val">{{.Score.Year}}<span class="bar-max">/15</span></span></div>
+      <div class="bar-row"><span class="bar-lbl">Bid</span><div class="bar-track"><div class="bar-fill" style="width:{{pct .Score.Bid 10}}%"></div></div><span class="bar-val">{{.Score.Bid}}<span class="bar-max">/10</span></span></div>
+      <div class="bar-row"><span class="bar-lbl">Model Tier</span><div class="bar-track"><div class="bar-fill" style="width:{{pct .Score.ModelTier 5}}%"></div></div><span class="bar-val">{{.Score.ModelTier}}<span class="bar-max">/5</span></span></div>
     </div>
 
     <div class="card">
