@@ -1,11 +1,14 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -470,6 +473,16 @@ func runCopartReport(args []string) {
 		}
 	}
 
+	// Backfill thumbnails from zip for lots the search page lazy-loaded.
+	for i := range lots {
+		if lots[i].ThumbnailURL == "" {
+			zipPath := filepath.Join(*dataDir, "images", lots[i].LotNumber+".zip")
+			if img, err := firstImageFromZip(zipPath); err == nil {
+				lots[i].ThumbnailURL = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(img)
+			}
+		}
+	}
+
 	date := time.Now().Format("2006-01-02")
 	outPath := filepath.Join(*outDir, date+".html")
 	if err := report.Generate(lots, outPath); err != nil {
@@ -543,6 +556,28 @@ Usage:
 
 Credentials are read from env vars or .env file:
   COPART_EMAIL, COPART_PASSWORD`)
+}
+
+// firstImageFromZip returns the raw bytes of the first JPEG in a zip archive.
+func firstImageFromZip(zipPath string) ([]byte, error) {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		name := strings.ToLower(f.Name)
+		if strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".jpeg") {
+			rc, err := f.Open()
+			if err != nil {
+				return nil, err
+			}
+			data, err := io.ReadAll(rc)
+			rc.Close()
+			return data, err
+		}
+	}
+	return nil, fmt.Errorf("no jpeg found in %s", zipPath)
 }
 
 // loadDotEnv reads key=value pairs from path into the process environment.
