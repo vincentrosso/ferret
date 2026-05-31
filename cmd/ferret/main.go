@@ -385,7 +385,7 @@ func runCopartAnalyze(_ context.Context, args []string) {
 	fmt.Fprintf(os.Stderr, "wrote %d analyzed lots to %s\n", len(results), *outFile)
 }
 
-func runMarketScrape(_ context.Context, args []string) {
+func runMarketScrape(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("market scrape", flag.ExitOnError)
 	dataDir := fs.String("data", "data", "data directory")
 	fs.Parse(args)
@@ -402,8 +402,8 @@ func runMarketScrape(_ context.Context, args []string) {
 	}
 	defer br.Close()
 
-	sc := market.New(br)
-	updated := sc.ScrapeAll(existing)
+	sc := market.New(br, market.DefaultConfig)
+	updated := sc.ScrapeAll(ctx, existing)
 
 	if err := updated.Save(compsPath); err != nil {
 		fatal("save comps", err)
