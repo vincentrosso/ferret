@@ -26,7 +26,7 @@ echo "--- 3/4 damage analysis ---"
 ./ferret copart analyze -in lots-ranked.json -data data -out lots-analyzed.json
 
 echo "--- 4/4 report ---"
-./ferret copart report -in lots-analyzed.json -out-dir reports -top 10
+./ferret copart report -in lots-analyzed.json -out-dir reports -top 10 -upcoming /var/www/autoarb/upcoming.html
 
 # Regenerate index page listing all reports
 python3 -c "

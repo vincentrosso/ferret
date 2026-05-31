@@ -441,6 +441,7 @@ func runCopartReport(args []string) {
 	outDir := fs.String("out-dir", "reports", "directory to write HTML reports")
 	dataDir := fs.String("data", "data", "data directory (for market-comps.json)")
 	topN := fs.Int("top", 10, "number of top lots to include")
+	upcomingPath := fs.String("upcoming", "", "path to write upcoming.html watchlist (e.g. /var/www/autoarb/upcoming.html)")
 	fs.Parse(args)
 
 	comps := market.Load(filepath.Join(*dataDir, "market-comps.json"))
@@ -527,6 +528,22 @@ func runCopartReport(args []string) {
 	}
 	fmt.Fprintf(os.Stderr, "report saved to %s\n", outPath)
 	fmt.Println(outPath)
+
+	// Generate upcoming.html watchlist if requested.
+	if *upcomingPath != "" {
+		var upcoming []report.UpcomingLot
+		for _, lot := range lots {
+			upcoming = append(upcoming, report.UpcomingLot{
+				Lot:       lot,
+				DetailURL: "/ferret/lot-" + lot.LotNumber + ".html",
+			})
+		}
+		if err := report.GenerateUpcoming(upcoming, *upcomingPath); err != nil {
+			slog.Warn("upcoming page failed", "err", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "upcoming page written to %s\n", *upcomingPath)
+		}
+	}
 }
 
 func runCopartCheck(ctx context.Context, args []string) {
