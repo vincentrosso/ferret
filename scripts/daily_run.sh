@@ -8,6 +8,11 @@ cd "$DIR"
 
 set -a; source .env; set +a
 
+AUTOARB_DIR="${AUTOARB_DIR:-/opt/autoarb}"
+PYTHON="${AUTOARB_PYTHON:-python3}"
+RUN="$PYTHON $AUTOARB_DIR/run_scrape.py"
+export SCRAPE_TRIGGER=cron
+
 DATE=$(date +%Y-%m-%d)
 mkdir -p logs reports data/images data/raw
 
@@ -17,16 +22,16 @@ exec > >(tee -a "$LOG") 2>&1
 echo "=== ferret daily run $DATE $(date +%H:%M:%S) ==="
 
 echo "--- 1/4 search (next 5 days, Toyota/Honda/Lexus, hail) ---"
-./ferret copart search -out lots-ranked.json
+$RUN ferret_copart_search
 
 echo "--- 2/4 details + images ---"
-./ferret copart detail -from lots-ranked.json -workers 2 -data data -images=true
+$RUN ferret_copart_detail
 
 echo "--- 3/4 damage analysis ---"
-./ferret copart analyze -in lots-ranked.json -data data -out lots-analyzed.json
+$RUN ferret_copart_analyze
 
 echo "--- 4/4 report ---"
-./ferret copart report -in lots-analyzed.json -out-dir reports -top 10 -upcoming /var/www/autoarb/upcoming.html
+$RUN ferret_copart_report
 
 # Regenerate index page listing all reports
 python3 -c "
