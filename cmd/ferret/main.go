@@ -26,6 +26,7 @@ import (
 	"github.com/vincentrosso/ferret/internal/report"
 	"github.com/vincentrosso/ferret/internal/scoring"
 	"github.com/vincentrosso/ferret/internal/server"
+	"github.com/vincentrosso/ferret/internal/valuation"
 	"github.com/vincentrosso/ferret/scrapers/copart"
 	"github.com/vincentrosso/ferret/scrapers/market"
 	"github.com/vincentrosso/ferret/store"
@@ -62,6 +63,8 @@ func main() {
 		runCopartDetail(ctx, os.Args[3:])
 	case "copart bid":
 		runCopartBid(ctx, os.Args[3:])
+	case "value carfax":
+		runValueCarfax(os.Args[3:])
 	case "copart analyze":
 		runCopartAnalyze(ctx, os.Args[3:])
 	case "copart report":
@@ -661,6 +664,25 @@ Usage:
 
 Credentials are read from env vars or .env file:
   COPART_EMAIL, COPART_PASSWORD`)
+}
+
+func runValueCarfax(args []string) {
+	fs := flag.NewFlagSet("value carfax", flag.ExitOnError)
+	zip := fs.String("zip", "60601", "zip code for regional pricing")
+	fs.Parse(args)
+	if len(fs.Args()) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: ferret value carfax <VIN> [-zip XXXXX]")
+		os.Exit(1)
+	}
+	vin := fs.Args()[0]
+	result, err := valuation.ScrapeCarfaxValue(vin, *zip)
+	if err != nil {
+		b, _ := json.Marshal(map[string]string{"error": err.Error(), "vin": vin})
+		fmt.Println(string(b))
+		os.Exit(1)
+	}
+	b, _ := json.MarshalIndent(result, "", "  ")
+	fmt.Println(string(b))
 }
 
 // firstImageFromZip returns the raw bytes of the first JPEG in a zip archive.
