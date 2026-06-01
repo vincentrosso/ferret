@@ -191,18 +191,34 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 
 	// ── DOM label→value for structured fields ─────────────────────────────
 
-	res.Make  = strings.ToUpper(domValue(page, "make"))
-	res.Model = strings.TrimSpace(domValue(page, "model"))
-	if yStr := domValue(page, "year"); yStr != "" {
+	res.Make  = strings.ToUpper(strings.TrimSpace(domValue(page, "make", "vehicle make")))
+	res.Model = strings.TrimSpace(domValue(page, "model", "vehicle model"))
+	if yStr := domValue(page, "year", "model year"); yStr != "" {
 		if y, err := strconv.Atoi(strings.TrimSpace(yStr)); err == nil && y > 1980 {
 			res.Year = y
 		}
 	}
-	// fallback: parse year from page title or body text
-	if res.Year == 0 {
-		if m := regexp.MustCompile(`\b(20[012]\d)\b`).FindString(bodyText[:min(len(bodyText), 500)]); m != "" {
-			if y, _ := strconv.Atoi(m); y > 1980 {
-				res.Year = y
+
+	// Fallback: extract year + make + model from the vehicle title in body text.
+	// Copart renders something like "2018 HONDA CIVIC LX" in the first ~1000 chars.
+	if res.Year == 0 || res.Make == "" {
+		snippet := bodyText
+		if len(snippet) > 2000 {
+			snippet = snippet[:2000]
+		}
+		// Match: 4-digit year followed by ALLCAPS make and model
+		reTitleLine := regexp.MustCompile(`(?m)\b(20[012]\d)\s+([A-Z][A-Z]+)\s+([A-Z][A-Z0-9 \-]+)`)
+		if m := reTitleLine.FindStringSubmatch(snippet); len(m) >= 4 {
+			if res.Year == 0 {
+				if y, _ := strconv.Atoi(m[1]); y > 1980 {
+					res.Year = y
+				}
+			}
+			if res.Make == "" {
+				res.Make = m[2]
+			}
+			if res.Model == "" {
+				res.Model = strings.TrimSpace(m[3])
 			}
 		}
 	}
