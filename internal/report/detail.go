@@ -318,9 +318,11 @@ a:hover { text-decoration: underline; }
       <div class="section-label">Research</div>
       <div class="btn-row">
         <a class="btn btn-primary" href="{{.LotURL | safeURL}}" target="_blank">Copart Lot ↗</a>
-        {{- if .VIN}}
+        {{- if eq (len .VIN) 17}}
         <a class="btn" href="https://www.carfax.com/vehicle/{{.VIN}}" target="_blank">Carfax ↗</a>
-        <a class="btn" href="https://www.autocheck.com/vehiclehistory/autocheck/en/vehiclehistory?vin={{.VIN}}" target="_blank">AutoCheck ↗</a>
+        <a class="btn" href="https://www.autocheck.com/vehiclehistory/autocheck/en/vinbasicresults?vin={{.VIN}}" target="_blank">AutoCheck ↗</a>
+        {{- else if .VIN}}
+        <span class="btn" style="opacity:0.5" title="Copart masks the last 6 digits — full VIN needed for history reports">VIN masked ({{len .VIN}}/17)</span>
         {{- end}}
       </div>
     </div>
