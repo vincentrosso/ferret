@@ -72,28 +72,42 @@ func ScrapeKBB(makeName, model string, year int, trim, proxyURL string) (*KBBRes
 	}
 
 	// Try progressively longer model slugs (base model first): "rav4", then
-	// "grand-cherokee", etc. First page with a value table wins.
+	// "grand-cherokee", etc. First page with a value table wins. The value table
+	// can be slow to render through a (rotating) residential proxy, so give each
+	// load up to 2 tries — a reload draws a fresh proxy IP.
 	var trims []KBBTrim
 	for _, slug := range modelSlugCandidates(model) {
-		if time.Now().After(deadline) {
-			break
-		}
 		url := fmt.Sprintf("https://www.kbb.com/%s/%s/%d/", makeSlug, slug, year)
-		_ = page.Timeout(navTimeout).Navigate(url)
-		_ = page.Timeout(navTimeout).WaitLoad()
-		time.Sleep(3 * time.Second)
+		for attempt := 0; attempt < 2; attempt++ {
+			if time.Now().After(deadline) {
+				break
+			}
+			_ = page.Timeout(navTimeout).Navigate(url)
+			_ = page.Timeout(navTimeout).WaitLoad()
+			time.Sleep(3 * time.Second)
+			page.Eval(`() => window.scrollTo(0, 1400)`) //nolint:errcheck — nudge lazy content
+			time.Sleep(1500 * time.Millisecond)
 
-		bodyEl, err := page.Timeout(navTimeout).Element("body")
-		if err != nil {
-			continue
+			bodyEl, err := page.Timeout(navTimeout).Element("body")
+			if err != nil {
+				continue
+			}
+			body, _ := bodyEl.Text()
+			if !strings.Contains(body, "Private Party Value") && !strings.Contains(body, "Trade-In Value") {
+				// Wrong slug → 404/redirect (no table, won't appear on retry).
+				// Slow render/challenged IP → reload once for a fresh IP.
+				if strings.Contains(strings.ToLower(body), "page not found") {
+					break // wrong slug; move to next candidate
+				}
+				continue // retry this slug (reload → new IP)
+			}
+			if parsed := parseKBBTrims(body); len(parsed) > 0 {
+				res.ModelSlug = slug
+				trims = parsed
+				break
+			}
 		}
-		body, _ := bodyEl.Text()
-		if !strings.Contains(body, "Private Party Value") && !strings.Contains(body, "Trade-In Value") {
-			continue
-		}
-		if parsed := parseKBBTrims(body); len(parsed) > 0 {
-			res.ModelSlug = slug
-			trims = parsed
+		if len(trims) > 0 {
 			break
 		}
 	}
