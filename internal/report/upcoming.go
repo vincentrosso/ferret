@@ -1,9 +1,11 @@
 package report
 
 import (
+	"fmt"
 	"html/template"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -12,6 +14,59 @@ import (
 type UpcomingLot struct {
 	Lot
 	DetailURL string // relative path to the deep-dive page, e.g. /ferret/lot-12345.html
+}
+
+// saleTime parses the lot's "MM/DD/YYYY" sale date, or zero time if absent/bad.
+func (u UpcomingLot) saleTime() time.Time {
+	t, err := time.Parse("01/02/2006", strings.TrimSpace(u.SaleDate))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// DaysUntil returns whole days until the auction (negative if past, -999 if unknown).
+func (u UpcomingLot) DaysUntil() int {
+	t := u.saleTime()
+	if t.IsZero() {
+		return -999
+	}
+	today := time.Now().Truncate(24 * time.Hour)
+	return int(t.Truncate(24*time.Hour).Sub(today).Hours() / 24)
+}
+
+// Countdown is a human label for how soon the auction is.
+func (u UpcomingLot) Countdown() string {
+	d := u.DaysUntil()
+	switch {
+	case d == -999:
+		return "date TBD"
+	case d < 0:
+		return "past"
+	case d == 0:
+		return "TODAY"
+	case d == 1:
+		return "TOMORROW"
+	case d <= 7:
+		return fmt.Sprintf("in %d days", d)
+	default:
+		return u.SaleDate
+	}
+}
+
+// CountdownColor highlights imminent auctions.
+func (u UpcomingLot) CountdownColor() string {
+	d := u.DaysUntil()
+	switch {
+	case d == 0:
+		return "#f87171" // today — red hot
+	case d == 1:
+		return "#fb923c" // tomorrow — orange
+	case d >= 2 && d <= 3:
+		return "#fbbf24" // soon — amber
+	default:
+		return "#94a3b8"
+	}
 }
 
 // Verdict returns a short recommendation string based on score and damage.
@@ -52,8 +107,38 @@ func (u UpcomingLot) VerdictBg() string {
 	}
 }
 
-// GenerateUpcoming writes the watchlist page to outPath.
+// GenerateUpcoming writes the curated list: soonest auctions worth acting on,
+// nearest-date first. Drops PASS verdicts and clearly-past auctions; lots with
+// no known sale date sink to the bottom (still shown, flagged "date TBD").
 func GenerateUpcoming(lots []UpcomingLot, outPath string) error {
+	var keep []UpcomingLot
+	for _, l := range lots {
+		if l.Verdict() == "PASS" {
+			continue // not worth observing or bidding
+		}
+		if l.DaysUntil() >= 0 || l.DaysUntil() == -999 {
+			keep = append(keep, l) // future or date-unknown; drop only definite past
+		}
+	}
+
+	// Sort: soonest first. Known future dates ascend; unknown-date lots last.
+	// Within the same day, better verdict (BID > WATCH) then higher score first.
+	vrank := map[string]int{"BID": 0, "WATCH": 1, "PASS": 2}
+	sort.SliceStable(keep, func(i, j int) bool {
+		di, dj := keep[i].DaysUntil(), keep[j].DaysUntil()
+		ui, uj := di == -999, dj == -999
+		if ui != uj {
+			return !ui // known dates before unknown
+		}
+		if !ui && di != dj {
+			return di < dj // soonest first
+		}
+		if vrank[keep[i].Verdict()] != vrank[keep[j].Verdict()] {
+			return vrank[keep[i].Verdict()] < vrank[keep[j].Verdict()]
+		}
+		return keep[i].Score.Total > keep[j].Score.Total
+	})
+
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return err
 	}
@@ -63,7 +148,7 @@ func GenerateUpcoming(lots []UpcomingLot, outPath string) error {
 	}
 	defer f.Close()
 	return upcomingTmpl.Execute(f, map[string]any{
-		"Lots":      lots,
+		"Lots":      keep,
 		"Generated": time.Now().Format("Jan 2, 2006 3:04 PM"),
 	})
 }
@@ -131,13 +216,16 @@ a { text-decoration: none; color: inherit; }
 </head>
 <body>
 <div class="hdr">
-  <h1>Upcoming Auctions</h1>
-  <div class="sub">{{.Generated}} &nbsp;·&nbsp; {{len .Lots}} lots tracked &nbsp;·&nbsp;
-    <a href="/ferret/">Full reports →</a>
+  <h1>Upcoming Auctions — soonest deals first</h1>
+  <div class="sub">{{.Generated}} &nbsp;·&nbsp; {{len .Lots}} deals to watch &amp; bid &nbsp;·&nbsp;
+    <a href="/ferret/">Full reports →</a> &nbsp;·&nbsp; <a href="/watcher.html">Bid watcher →</a>
   </div>
 </div>
 
 <div class="list">
+{{- if not .Lots}}
+<div style="padding:40px;text-align:center;color:#475569;font-size:0.85rem">No actionable deals with upcoming auction dates right now.</div>
+{{- end}}
 {{- range .Lots}}
 <div class="row">
   {{- if .ThumbnailURL}}
@@ -149,7 +237,10 @@ a { text-decoration: none; color: inherit; }
   <div class="verdict" style="background:{{.VerdictBg}};color:{{.VerdictColor}}">{{.Verdict}}</div>
 
   <div class="main">
-    <div class="title">{{.Year}} {{.Make}} {{.Model}}</div>
+    <div class="title">
+      <span style="color:{{.CountdownColor}};font-weight:800">⏰ {{.Countdown}}</span>
+      &nbsp; {{.Year}} {{.Make}} {{.Model}}
+    </div>
     <div class="meta">
       <div class="score-wrap">
         <div class="score-track"><div class="score-fill" style="width:{{.Score.Total}}%"></div></div>
@@ -160,8 +251,9 @@ a { text-decoration: none; color: inherit; }
       {{- if .Damage.PDRViable}}<span class="m" style="color:#4ade80">PDR ✓</span>{{end}}
       {{- end}}
       <span class="m"><b>{{dollar (ftoi .CurrentBid)}}</b> <span style="color:#475569">bid</span></span>
+      {{- if .MaxBid}}<span class="m">max <b style="color:#4ade80">{{dollar .MaxBid}}</b></span>{{end}}
       <span class="m">{{commas .Odometer}} mi</span>
-      {{- if .SaleDate}}<span class="m" style="color:#fbbf24;font-weight:600">{{.SaleDate}}</span>{{end}}
+      {{- if .SaleDate}}<span class="m" style="color:#64748b">{{.SaleDate}}</span>{{end}}
     </div>
   </div>
 

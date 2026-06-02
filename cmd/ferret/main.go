@@ -517,13 +517,11 @@ func runCopartReport(args []string) {
 		fatal("decode input", err)
 	}
 
-	n := *topN
-	if n > len(raw) {
-		n = len(raw)
-	}
-
-	lots := make([]report.Lot, n)
-	for i, al := range raw[:n] {
+	// Build report.Lot for ALL analyzed lots (not just top-N) so the upcoming
+	// page — the curated soonest-deals list — can consider every lot. The HTML
+	// report itself still shows only the top-N.
+	allLots := make([]report.Lot, len(raw))
+	for i, al := range raw {
 		bid := int(al.CurrentBid)
 		repairMid := 0
 		if al.Damage != nil {
@@ -538,7 +536,7 @@ func runCopartReport(args []string) {
 		maxBid := scoring.MaxBid(resale, repairMid, 0.50)
 		roiAt80 := scoring.ROIPercent(maxBid*80/100, repairMid, resale)
 
-		lots[i] = report.Lot{
+		allLots[i] = report.Lot{
 			RankedLot:  al.RankedLot,
 			Damage:     al.Damage,
 			EstResale:  resale,
@@ -546,17 +544,17 @@ func runCopartReport(args []string) {
 			ROIAt80Pct: roiAt80,
 		}
 		if al.Damage != nil {
-			lots[i].TotalCostLow = bid + al.Damage.RepairCostLow
-			lots[i].TotalCostHigh = bid + al.Damage.RepairCostHigh
+			allLots[i].TotalCostLow = bid + al.Damage.RepairCostLow
+			allLots[i].TotalCostHigh = bid + al.Damage.RepairCostHigh
 		}
 	}
 
 	// Backfill thumbnails from zip for lots the search page lazy-loaded.
-	for i := range lots {
-		if lots[i].ThumbnailURL == "" {
-			zipPath := filepath.Join(*dataDir, "images", lots[i].LotNumber+".zip")
+	for i := range allLots {
+		if allLots[i].ThumbnailURL == "" {
+			zipPath := filepath.Join(*dataDir, "images", allLots[i].LotNumber+".zip")
 			if img, err := firstImageFromZip(zipPath); err == nil {
-				lots[i].ThumbnailURL = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(img)
+				allLots[i].ThumbnailURL = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(img)
 			}
 		}
 	}
@@ -564,31 +562,36 @@ func runCopartReport(args []string) {
 	date := time.Now().Format("2006-01-02")
 	reportFile := date + ".html"
 
-	// Generate per-lot deep-dive pages; also backfill SaleDate from detail.json.
-	for i := range lots {
-		dp := buildDetailPage(lots[i], *dataDir, reportFile)
+	// Deep-dive page for every analyzed lot; also backfill SaleDate from detail.json.
+	for i := range allLots {
+		dp := buildDetailPage(allLots[i], *dataDir, reportFile)
 		if dp.SaleDate != "" {
-			lots[i].SaleDate = dp.SaleDate
+			allLots[i].SaleDate = dp.SaleDate
 		}
-		detailPath := filepath.Join(*outDir, "lot-"+lots[i].LotNumber+".html")
+		detailPath := filepath.Join(*outDir, "lot-"+allLots[i].LotNumber+".html")
 		if err := report.GenerateDetail(dp, detailPath); err != nil {
-			slog.Warn("detail page failed", "lot", lots[i].LotNumber, "err", err)
+			slog.Warn("detail page failed", "lot", allLots[i].LotNumber, "err", err)
 		} else {
-			slog.Info("detail page written", "lot", lots[i].LotNumber)
+			slog.Info("detail page written", "lot", allLots[i].LotNumber)
 		}
 	}
 
+	// HTML report: top-N only.
+	n := *topN
+	if n > len(allLots) {
+		n = len(allLots)
+	}
 	outPath := filepath.Join(*outDir, reportFile)
-	if err := report.Generate(lots, outPath); err != nil {
+	if err := report.Generate(allLots[:n], outPath); err != nil {
 		fatal("generate report", err)
 	}
 	fmt.Fprintf(os.Stderr, "report saved to %s\n", outPath)
 	fmt.Println(outPath)
 
-	// Generate upcoming.html watchlist if requested.
+	// Upcoming = curated soonest-deals list, built from ALL analyzed lots.
 	if *upcomingPath != "" {
 		var upcoming []report.UpcomingLot
-		for _, lot := range lots {
+		for _, lot := range allLots {
 			upcoming = append(upcoming, report.UpcomingLot{
 				Lot:       lot,
 				DetailURL: "/ferret/lot-" + lot.LotNumber + ".html",
