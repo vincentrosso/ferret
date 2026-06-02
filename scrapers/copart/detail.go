@@ -112,25 +112,35 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 	page.MustEval(`() => window.scrollTo(0, document.body.scrollHeight)`)
 	time.Sleep(600 * time.Millisecond)
 
-	// Try to expand "Full vehicle details"
+	// Expand "Full vehicle details" — try multiple selector strategies
 	expandSelectors := []string{
 		`a[href*='vehicle-detail']`,
 		`button[class*='vehicle-detail']`,
 		`[data-uname*='vehicleDetail']`,
+		`[data-uname*='fullDetails']`,
+		`copart-vehicle-detail button`,
+		`[class*='view-more']`,
+		`[class*='show-more']`,
 	}
 	for _, sel := range expandSelectors {
 		if el, err := page.Timeout(2 * time.Second).Element(sel); err == nil {
 			el.Click(proto.InputMouseButtonLeft, 1) //nolint:errcheck
-			time.Sleep(800 * time.Millisecond)
+			time.Sleep(1 * time.Second)
 			break
 		}
 	}
-	if el, err := page.Timeout(2 * time.Second).ElementX(
-		`//*[contains(text(),'Full vehicle details')]`,
-	); err == nil {
-		el.Click(proto.InputMouseButtonLeft, 1) //nolint:errcheck
-		time.Sleep(800 * time.Millisecond)
+	// XPath fallback — any clickable element whose text mentions details/VIN
+	for _, text := range []string{"Full vehicle details", "View full details", "More details", "Show VIN"} {
+		if el, err := page.Timeout(1500 * time.Millisecond).ElementX(
+			fmt.Sprintf(`//*[contains(text(),'%s')]`, text),
+		); err == nil {
+			el.Click(proto.InputMouseButtonLeft, 1) //nolint:errcheck
+			time.Sleep(1 * time.Second)
+			break
+		}
 	}
+	// Give Angular time to render newly-visible sections
+	time.Sleep(500 * time.Millisecond)
 
 	bodyText, err := page.MustElement("body").Text()
 	if err != nil {
@@ -145,7 +155,25 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 
 	// ── regex-based extractions (fast, works on body text) ────────────────
 
-	res.VIN = reMatch(reVIN, bodyText, 1)
+	// VIN: three-layer extraction — DOM label → JS innerText scan → body regex
+	res.VIN = strings.ToUpper(strings.TrimSpace(domValue(page, "vin", "vin number", "vehicle identification number")))
+	if res.VIN == "" {
+		// JavaScript scan: find any standalone 17-char VIN string in the rendered page
+		if r, err := page.Eval(`() => {
+			var m = (document.body.innerText || '').match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
+			return m ? m[0] : '';
+		}`); err == nil {
+			res.VIN = strings.TrimSpace(r.Value.Str())
+		}
+	}
+	if res.VIN == "" {
+		// Body text regex fallback
+		res.VIN = reMatch(reVIN, bodyText, 1)
+	}
+	// Validate — VINs contain only A-H, J-N, P-R, S-Z, 0-9 (no I, O, Q)
+	if res.VIN != "" && !regexp.MustCompile(`^[A-HJ-NPR-Z0-9]{17}$`).MatchString(res.VIN) {
+		res.VIN = ""
+	}
 	res.ConditionGrade = reMatch(reGrade, bodyText, 1)
 	res.RunAndDrive = reMatch(reRunDrive, bodyText, 1)
 	if m := reDriveType.FindStringSubmatch(bodyText); len(m) >= 2 {
