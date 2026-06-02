@@ -44,6 +44,13 @@ func New(opts Options) (*Browser, error) {
 		Set("disable-blink-features", "AutomationControlled").
 		Delete("enable-automation")
 
+	// Use the system Chrome if present (installed via .deb on the server) instead
+	// of letting go-rod download its own — the download cache (~/.cache/rod) isn't
+	// writable when the FastAPI service runs us as www-data.
+	if path, ok := launcher.LookPath(); ok {
+		l = l.Bin(path)
+	}
+
 	// Required when running as root on Linux (VPS/server).
 	if runtime.GOOS == "linux" {
 		l = l.Set("no-sandbox", "")
