@@ -72,6 +72,8 @@ var (
 	reKeys         = regexp.MustCompile(`(?i)Keys?[:\s]*(Yes|No|Available|Not Available|Present|Missing)`)
 	reAirbags      = regexp.MustCompile(`(?i)Airbags?[:\s]*(Deployed|Not Deployed|Yes|No)`)
 	reSaleDate     = regexp.MustCompile(`(\d{2}/\d{2}/\d{4})`)
+	// Copart's labeled sale date, e.g. "Sale date: Tue. Jun 02, 2026 01:00 AM UTC"
+	reSaleDateLine = regexp.MustCompile(`(?i)sale date[:\s]+([A-Za-z]{3}\.?\s+[A-Za-z]{3}\.?\s+\d{1,2},\s+\d{4}(?:\s+\d{1,2}:\d{2}\s*(?:AM|PM)?\s*[A-Z]{0,4})?)`)
 	reBIN          = regexp.MustCompile(`(?i)buy\s*(?:it\s*)?now`)
 	reBINAmount    = regexp.MustCompile(`(?i)buy\s*(?:it\s*)?now[:\s$]*([\d,]+)`)
 	reCurrentBid   = regexp.MustCompile(`(?i)Current\s*Bid[:\s$]*([\d,]+)`)
@@ -307,16 +309,23 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 		}
 	}
 
-	// Only accept a real date (MM/DD/YYYY); ignore status words like "Future"
+	// Sale date — Copart shows either "MM/DD/YYYY" or "Tue. Jun 02, 2026 01:00 AM UTC".
 	if sd := domValue(page, "sale date", "auction date", "sale information"); sd != "" {
 		if strings.Contains(strings.ToLower(sd), "future") {
 			res.SaleStatus = "future"
-		} else if reSaleDate.MatchString(sd) {
-			res.SaleDate = reMatch(reSaleDate, sd, 1)
+		} else if d := parseCopartSaleDate(sd); d != "" {
+			res.SaleDate = d
 		}
 	}
-	// No body-text fallback: reSaleDate against full body finds random dates (listing
-	// history, repair estimates, etc.) that are unrelated to the auction schedule.
+	// Fallback: the labeled "Sale date: …" line in the body text (targeted, so it
+	// won't grab unrelated dates from listing history or repair estimates).
+	if res.SaleDate == "" && res.SaleStatus != "future" {
+		if m := reSaleDateLine.FindStringSubmatch(bodyText); len(m) >= 2 {
+			if d := parseCopartSaleDate(m[1]); d != "" {
+				res.SaleDate = d
+			}
+		}
+	}
 
 	// Fuel / loss fallback from DOM
 	if res.FuelType == "" {
@@ -607,6 +616,35 @@ func reMatch(re *regexp.Regexp, text string, group int) string {
 	m := re.FindStringSubmatch(text)
 	if len(m) > group {
 		return strings.TrimSpace(m[group])
+	}
+	return ""
+}
+
+// parseCopartSaleDate normalizes Copart's various sale-date renderings to
+// "MM/DD/YYYY". Handles "01/12/2026" and "Tue. Jun 02, 2026 01:00 AM UTC".
+func parseCopartSaleDate(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if m := reSaleDate.FindString(s); m != "" {
+		return m
+	}
+	// First line only (the field value), collapse whitespace.
+	s = strings.TrimSpace(strings.Split(s, "\n")[0])
+	s = strings.Join(strings.Fields(s), " ")
+	for _, layout := range []string{
+		"Mon. Jan 02, 2006 03:04 PM MST",
+		"Mon. Jan 2, 2006 03:04 PM MST",
+		"Mon Jan 02, 2006 03:04 PM MST",
+		"Mon. Jan. 02, 2006 03:04 PM MST",
+		"Mon. Jan 02, 2006",
+		"Jan 02, 2006 03:04 PM MST",
+		"Jan 2, 2006",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.Format("01/02/2006")
+		}
 	}
 	return ""
 }
