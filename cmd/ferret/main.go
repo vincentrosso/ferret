@@ -316,10 +316,11 @@ func runCopartFromURL(ctx context.Context, args []string) {
 	maxPages := fs.Int("pages", 0, "max pages (0 = all)")
 	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
 	outFile := fs.String("out", "", "write ranked JSON to file (default stdout)")
+	proxy := fs.String("proxy", "", "residential proxy for Copart (when datacenter IP is throttled)")
 	fs.Parse(args)
 
 	if *rawURL == "" {
-		fmt.Fprintln(os.Stderr, "usage: ferret copart from-url -url <copart URL> [-out lots.json]")
+		fmt.Fprintln(os.Stderr, "usage: ferret copart from-url -url <copart URL> [-out lots.json] [-proxy URL]")
 		os.Exit(1)
 	}
 
@@ -327,6 +328,7 @@ func runCopartFromURL(ctx context.Context, args []string) {
 		Headless: true,
 		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
 			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+		ProxyURL: *proxy,
 	})
 	if err != nil {
 		fatal("launch browser", err)
