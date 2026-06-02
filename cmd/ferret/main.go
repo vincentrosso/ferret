@@ -65,6 +65,8 @@ func main() {
 		runCopartBid(ctx, os.Args[3:])
 	case "value carfax":
 		runValueCarfax(os.Args[3:])
+	case "value auction-history":
+		runValueAuctionHistory(os.Args[3:])
 	case "copart analyze":
 		runCopartAnalyze(ctx, os.Args[3:])
 	case "copart report":
@@ -678,6 +680,30 @@ func runValueCarfax(args []string) {
 	result, err := valuation.ScrapeCarfaxValue(vin, *zip)
 	if err != nil {
 		b, _ := json.Marshal(map[string]string{"error": err.Error(), "vin": vin})
+		fmt.Println(string(b))
+		os.Exit(1)
+	}
+	b, _ := json.MarshalIndent(result, "", "  ")
+	fmt.Println(string(b))
+}
+
+func runValueAuctionHistory(args []string) {
+	fs := flag.NewFlagSet("value auction-history", flag.ExitOnError)
+	makeName := fs.String("make", "", "vehicle make, e.g. TOYOTA")
+	model := fs.String("model", "", "vehicle model, e.g. RAV4")
+	year := fs.Int("year", 0, "model year")
+	proxy := fs.String("proxy", os.Getenv("SALESHISTORY_PROXY"),
+		"residential proxy URL (required from datacenter IPs; Cloudflare)")
+	fs.Parse(args)
+
+	if *makeName == "" || *model == "" || *year == 0 {
+		fmt.Fprintln(os.Stderr, "usage: ferret value auction-history -make TOYOTA -model RAV4 -year 2022 [-proxy URL]")
+		os.Exit(1)
+	}
+
+	result, err := valuation.ScrapeAuctionHistory(*makeName, *model, *year, *proxy)
+	if err != nil {
+		b, _ := json.Marshal(map[string]string{"error": err.Error()})
 		fmt.Println(string(b))
 		os.Exit(1)
 	}
