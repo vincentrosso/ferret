@@ -67,8 +67,8 @@ func ScrapeAuctionHistory(makeName, model string, year int, proxyURL string) (*A
 	// Hard 60s budget for the whole scrape — anything slower is treated as a
 	// failure (a dead proxy / unsolved Cloudflare won't recover). Bounded
 	// per-step timeouts ensure defer br.Close() runs and Chrome is cleaned up.
-	deadline := time.Now().Add(55 * time.Second)
-	const navTimeout = 18 * time.Second
+	deadline := time.Now().Add(28 * time.Second)
+	const navTimeout = 10 * time.Second
 	overBudget := func() bool { return time.Now().After(deadline) }
 
 	page, err := br.NewPage("https://saleshistory.org/")
@@ -76,7 +76,7 @@ func ScrapeAuctionHistory(makeName, model string, year int, proxyURL string) (*A
 		return nil, fmt.Errorf("open homepage: %w", err)
 	}
 	_ = page.Timeout(navTimeout).WaitLoad() // partial load OK (Cloudflare/SPA)
-	time.Sleep(3 * time.Second)             // let Cloudflare clear
+	time.Sleep(2 * time.Second) // let Cloudflare clear
 
 	brand := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(makeName), " ", "_"))
 
@@ -98,7 +98,7 @@ func ScrapeAuctionHistory(makeName, model string, year int, proxyURL string) (*A
 	)
 	_ = page.Timeout(navTimeout).Navigate(catURL)
 	_ = page.Timeout(navTimeout).WaitLoad()
-	time.Sleep(4 * time.Second) // client-side lot render
+	time.Sleep(3 * time.Second) // client-side lot render
 
 	vinHost := firstVINHost(page)
 	if vinHost == "" {
@@ -113,7 +113,7 @@ func ScrapeAuctionHistory(makeName, model string, year int, proxyURL string) (*A
 
 	_ = page.Timeout(navTimeout).Navigate("https://" + vinHost + "/")
 	_ = page.Timeout(navTimeout).WaitLoad()
-	time.Sleep(3 * time.Second)
+	time.Sleep(2 * time.Second)
 
 	bodyEl, err := page.Timeout(navTimeout).Element("body")
 	if err != nil {

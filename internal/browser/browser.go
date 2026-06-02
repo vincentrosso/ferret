@@ -1,6 +1,12 @@
 package browser
 
 import (
+	"bufio"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"net/url"
 	"runtime"
 	"time"
@@ -43,23 +49,19 @@ func New(opts Options) (*Browser, error) {
 		l = l.Set("no-sandbox", "")
 	}
 
-	// Authenticated proxy: Chrome can't auth via --proxy-server (407s), so we
-	// strip the credentials from the URL, pass only host:port to Chrome, and
-	// answer the proxy auth challenge over CDP's Fetch domain (HandleAuth).
-	var proxyUser, proxyPass string
+	// Authenticated proxy: Chrome can't auth an upstream proxy via --proxy-server
+	// (407s, and the CDP Fetch/HandleAuth path stalls connections). The reliable
+	// fix is a tiny local relay that injects Proxy-Authorization on every CONNECT
+	// and tunnels to the upstream proxy; Chrome points at the relay with no creds.
 	if opts.ProxyURL != "" {
-		if pu, err := url.Parse(opts.ProxyURL); err == nil && pu.Host != "" {
-			if pu.User != nil {
-				proxyUser = pu.User.Username()
-				proxyPass, _ = pu.User.Password()
+		if pu, err := url.Parse(opts.ProxyURL); err == nil && pu.Host != "" && pu.User != nil {
+			if local, err := startProxyRelay(pu); err == nil {
+				l = l.Proxy("http://" + local)
+			} else {
+				l = l.Proxy(opts.ProxyURL) // fall back; may 407
 			}
-			scheme := pu.Scheme
-			if scheme == "" {
-				scheme = "http"
-			}
-			l = l.Proxy(scheme + "://" + pu.Host) // host:port, no creds
 		} else {
-			l = l.Proxy(opts.ProxyURL)
+			l = l.Proxy(opts.ProxyURL) // no creds — Chrome handles it
 		}
 	}
 
@@ -68,24 +70,87 @@ func New(opts Options) (*Browser, error) {
 	b := rod.New().ControlURL(u).MustConnect()
 	b.MustIgnoreCertErrors(true)
 
-	// Handle proxy auth challenges (407) for the browser session. Chrome caches
-	// proxy credentials after the first success; re-arm in a loop so later
-	// connections through the proxy are also covered. Exits when the browser closes.
-	if proxyUser != "" {
-		go func() {
-			defer func() { _ = recover() }()
-			for {
-				if err := b.HandleAuth(proxyUser, proxyPass)(); err != nil {
-					return
-				}
-			}
-		}()
-	}
-
 	// Clear any stale cookies from previous sessions
 	b.MustSetCookies()
 
 	return &Browser{rod: b, opts: opts}, nil
+}
+
+// startProxyRelay listens on a local port and forwards Chrome's connections to
+// the upstream proxy, injecting Proxy-Authorization on each CONNECT. Returns the
+// local "127.0.0.1:PORT" address. The listener lives for the process lifetime.
+func startProxyRelay(upstream *url.URL) (string, error) {
+	user := upstream.User.Username()
+	pass, _ := upstream.User.Password()
+	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
+	upHost := upstream.Host
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go relayConn(c, upHost, auth)
+		}
+	}()
+	return ln.Addr().String(), nil
+}
+
+func relayConn(client net.Conn, upHost, auth string) {
+	defer client.Close()
+
+	cr := bufio.NewReader(client)
+	req, err := http.ReadRequest(cr)
+	if err != nil {
+		return
+	}
+
+	up, err := net.DialTimeout("tcp", upHost, 10*time.Second)
+	if err != nil {
+		return
+	}
+	defer up.Close()
+
+	if req.Method == http.MethodConnect {
+		// Forward the CONNECT to the upstream proxy with credentials.
+		fmt.Fprintf(up, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\n\r\n",
+			req.Host, req.Host, auth)
+		ur := bufio.NewReader(up)
+		resp, err := http.ReadResponse(ur, req)
+		if err != nil {
+			return
+		}
+		if resp.StatusCode != 200 {
+			fmt.Fprintf(client, "HTTP/1.1 %d %s\r\n\r\n", resp.StatusCode, resp.Status)
+			return
+		}
+		fmt.Fprint(client, "HTTP/1.1 200 Connection established\r\n\r\n")
+		// Drain any bytes the buffered readers already consumed, then tunnel raw.
+		if n := cr.Buffered(); n > 0 {
+			b, _ := cr.Peek(n)
+			up.Write(b)
+		}
+		if n := ur.Buffered(); n > 0 {
+			b, _ := ur.Peek(n)
+			client.Write(b)
+		}
+		go io.Copy(up, client)
+		io.Copy(client, up)
+		return
+	}
+
+	// Plain HTTP — add auth and forward through the upstream proxy.
+	req.Header.Set("Proxy-Authorization", auth)
+	if err := req.WriteProxy(up); err != nil {
+		return
+	}
+	go io.Copy(up, client)
+	io.Copy(client, up)
 }
 
 func (b *Browser) NewPage(url string) (*rod.Page, error) {
