@@ -216,6 +216,15 @@ func (s *Scraper) RunSearchURL(ctx context.Context, rawURL string, maxPages int)
 			break
 		}
 
+		// Scroll through the table to trigger lazy-loaded row thumbnails, then
+		// return to top — otherwise rows below the fold have no img src yet.
+		for y := 0; y < 9000; y += 700 {
+			page.Eval(`(y) => window.scrollTo(0, y)`, y) //nolint:errcheck
+			time.Sleep(120 * time.Millisecond)
+		}
+		page.Eval(`() => window.scrollTo(0, 0)`) //nolint:errcheck
+		time.Sleep(700 * time.Millisecond)
+
 		pageLots, err := extractRows(ctx, page, seen)
 		if err != nil {
 			slog.Warn("row extraction error", "page", pageNum, "err", err)
