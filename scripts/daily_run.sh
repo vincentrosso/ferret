@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full daily pipeline: search → detail → analyze → report
+# Full daily pipeline: search → detail → analyze → value → report
 # Runs at 5am PDT via cron on the Hetzner server.
 set -euo pipefail
 
@@ -27,10 +27,18 @@ $RUN ferret_copart_search
 echo "--- 2/4 details + images ---"
 $RUN ferret_copart_detail
 
-echo "--- 3/4 damage analysis ---"
+echo "--- 3/5 damage analysis ---"
 $RUN ferret_copart_analyze
 
-echo "--- 4/4 report ---"
+echo "--- 4/5 valuations → history (Craigslist, free) ---"
+# Free CL comps for every analyzed lot, saved to the valuations table for
+# historical comparison. Marketcheck stays manual to protect the 500/mo cap.
+$PYTHON "$AUTOARB_DIR/value_lots.py" \
+    --lots-file "$DIR/lots-analyzed.json" \
+    --data-dir "$DIR/data" \
+    --source cl || echo "  (valuation step soft-failed — continuing)"
+
+echo "--- 5/5 report ---"
 $RUN ferret_copart_report
 
 # Regenerate index page listing all reports
