@@ -67,6 +67,8 @@ func main() {
 		runValueCarfax(os.Args[3:])
 	case "value auction-history":
 		runValueAuctionHistory(os.Args[3:])
+	case "value kbb":
+		runValueKBB(os.Args[3:])
 	case "copart analyze":
 		runCopartAnalyze(ctx, os.Args[3:])
 	case "copart report":
@@ -705,6 +707,34 @@ func runValueAuctionHistory(args []string) {
 	}
 
 	result, err := valuation.ScrapeAuctionHistory(*makeName, *model, *year, *proxy)
+	if err != nil {
+		b, _ := json.Marshal(map[string]string{"error": err.Error()})
+		fmt.Println(string(b))
+		os.Exit(1)
+	}
+	b, _ := json.MarshalIndent(result, "", "  ")
+	fmt.Println(string(b))
+}
+
+func runValueKBB(args []string) {
+	fs := flag.NewFlagSet("value kbb", flag.ExitOnError)
+	makeName := fs.String("make", "", "vehicle make, e.g. TOYOTA")
+	model := fs.String("model", "", "vehicle model, e.g. RAV4")
+	year := fs.Int("year", 0, "model year")
+	trim := fs.String("trim", "", "trim, e.g. XLE (optional)")
+	proxy := fs.String("proxy", os.Getenv("KBB_PROXY"),
+		"residential proxy URL (defaults to SALESHISTORY_PROXY if unset)")
+	fs.Parse(args)
+
+	if *proxy == "" {
+		*proxy = os.Getenv("SALESHISTORY_PROXY")
+	}
+	if *makeName == "" || *model == "" || *year == 0 {
+		fmt.Fprintln(os.Stderr, "usage: ferret value kbb -make TOYOTA -model RAV4 -year 2022 [-trim XLE] [-proxy URL]")
+		os.Exit(1)
+	}
+
+	result, err := valuation.ScrapeKBB(*makeName, *model, *year, *trim, *proxy)
 	if err != nil {
 		b, _ := json.Marshal(map[string]string{"error": err.Error()})
 		fmt.Println(string(b))
