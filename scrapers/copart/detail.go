@@ -159,29 +159,31 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 	// 1. DOM label (dt/th/label)
 	res.VIN = strings.ToUpper(strings.TrimSpace(domValue(page, "vin", "vin number", "vehicle identification number")))
 
-	// 2. JS: scan innerText, input values, data attributes, and full innerHTML
+	// 2. JS: scan innerText and innerHTML for full or partially-masked VIN
+	//    Copart shows: VIN:2T3W1RFV4NW****** (last 6 masked for basic accounts)
 	if res.VIN == "" {
 		if r, err := page.Eval(`() => {
-			var re = /\b[A-HJ-NPR-Z0-9]{17}\b/;
-			// Check visible text
-			var m = (document.body.innerText || '').match(re);
+			var txt = document.body.innerText || '';
+			// Full VIN (17 valid chars)
+			var m = txt.match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
 			if (m) return m[0];
-			// Check all input values (VIN often in readonly input)
-			for (var el of document.querySelectorAll('input, [value]')) {
-				var v = (el.value || el.getAttribute('value') || '').trim().toUpperCase();
-				if (re.test(v)) return v;
+			// Masked VIN: 11 valid chars + up to 6 asterisks (Copart basic account)
+			m = txt.match(/VIN\s*:?\s*([A-HJ-NPR-Z0-9]{11}[\*A-HJ-NPR-Z0-9]{6})/i);
+			if (m) return m[1];
+			// Check input values
+			for (var el of document.querySelectorAll('input')) {
+				var v = (el.value || '').trim().toUpperCase();
+				if (/^[A-HJ-NPR-Z0-9]{17}$/.test(v)) return v;
 			}
-			// Check full innerHTML (may be in data-* or hidden text)
+			// Check innerHTML for full VIN in data attributes or hidden text
 			var html = document.body.innerHTML;
-			m = html.match(/[A-HJ-NPR-Z0-9]{17}/g);
-			if (m) {
-				for (var c of m) {
-					if (re.test(c)) return c;
-				}
-			}
+			m = html.match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
+			if (m) return m[0];
 			return '';
 		}`); err == nil && r.Value.Str() != "" {
-			res.VIN = strings.TrimSpace(r.Value.Str())
+			res.VIN = strings.ToUpper(strings.TrimSpace(r.Value.Str()))
+			// Strip trailing asterisks (Copart masks last 6 digits for basic accounts)
+			res.VIN = strings.TrimRight(res.VIN, "*")
 		}
 	}
 
@@ -208,8 +210,8 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 		res.VIN = reMatch(reVIN, bodyText, 1)
 	}
 
-	// Validate charset — VINs never contain I, O, Q
-	if res.VIN != "" && !regexp.MustCompile(`^[A-HJ-NPR-Z0-9]{17}$`).MatchString(res.VIN) {
+	// Validate charset — keep full (17) or partial (≥11) VINs, discard junk
+	if res.VIN != "" && !regexp.MustCompile(`^[A-HJ-NPR-Z0-9]{11,17}$`).MatchString(res.VIN) {
 		res.VIN = ""
 	}
 	res.ConditionGrade = reMatch(reGrade, bodyText, 1)
