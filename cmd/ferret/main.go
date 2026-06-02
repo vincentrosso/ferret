@@ -212,6 +212,7 @@ func runCopartDetail(ctx context.Context, args []string) {
 	dataDir := fs.String("data", "data", "root directory for raw JSON + images")
 	images := fs.Bool("images", true, "download lot images")
 	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
+	proxy := fs.String("proxy", "", "residential proxy (when datacenter IP is throttled)")
 	fs.Parse(args)
 
 	if *lotFlag == "" && *fromFile == "" {
@@ -264,6 +265,7 @@ func runCopartDetail(ctx context.Context, args []string) {
 				Headless: true,
 				UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
 					"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+				ProxyURL: *proxy,
 			})
 			if err != nil {
 				slog.Error("worker: launch browser", "err", err)
