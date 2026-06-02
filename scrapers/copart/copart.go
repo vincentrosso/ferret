@@ -182,14 +182,18 @@ func (s *Scraper) RunSearch(ctx context.Context, params SearchParams) ([]Lot, er
 	if err != nil {
 		return nil, fmt.Errorf("build url: %w", err)
 	}
+	slog.Info("search", "makes", params.Makes, "yearMin", params.YearMin, "odoMax", params.OdoMax)
+	return s.RunSearchURL(ctx, searchURL, params.MaxPages)
+}
 
-	page, err := s.br.NewPage(searchURL)
+// RunSearchURL scrapes lots from ANY pre-built Copart results URL — a search,
+// a saleListResult, or a member-saved filter. Paginates through all pages.
+func (s *Scraper) RunSearchURL(ctx context.Context, rawURL string, maxPages int) ([]Lot, error) {
+	page, err := s.br.NewPage(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("open search page: %w", err)
 	}
 	defer page.Close() //nolint:errcheck
-
-	slog.Info("search", "makes", params.Makes, "yearMin", params.YearMin, "odoMax", params.OdoMax)
 
 	// Wait for Angular to populate the table
 	rowSel := `table tbody tr`
@@ -202,7 +206,7 @@ func (s *Scraper) RunSearch(ctx context.Context, params SearchParams) ([]Lot, er
 	seen := map[string]bool{}
 
 	for pageNum := 1; ; pageNum++ {
-		if params.MaxPages > 0 && pageNum > params.MaxPages {
+		if maxPages > 0 && pageNum > maxPages {
 			break
 		}
 

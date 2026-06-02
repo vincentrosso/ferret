@@ -59,6 +59,8 @@ func main() {
 		runCopartCheck(ctx, os.Args[3:])
 	case "copart search":
 		runCopartSearch(ctx, os.Args[3:])
+	case "copart from-url":
+		runCopartFromURL(ctx, os.Args[3:])
 	case "copart detail":
 		runCopartDetail(ctx, os.Args[3:])
 	case "copart bid":
@@ -306,6 +308,60 @@ func runCopartDetail(ctx context.Context, args []string) {
 
 	wg.Wait()
 	slog.Info("detail scrape complete", "ok", succeeded, "failed", failed)
+}
+
+func runCopartFromURL(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("copart from-url", flag.ExitOnError)
+	rawURL := fs.String("url", "", "any Copart results URL (search / saleListResult)")
+	maxPages := fs.Int("pages", 0, "max pages (0 = all)")
+	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
+	outFile := fs.String("out", "", "write ranked JSON to file (default stdout)")
+	fs.Parse(args)
+
+	if *rawURL == "" {
+		fmt.Fprintln(os.Stderr, "usage: ferret copart from-url -url <copart URL> [-out lots.json]")
+		os.Exit(1)
+	}
+
+	br, err := browser.New(browser.Options{
+		Headless: true,
+		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	})
+	if err != nil {
+		fatal("launch browser", err)
+	}
+	defer br.Close()
+
+	email := mustEnv("COPART_EMAIL")
+	password := mustEnv("COPART_PASSWORD")
+	sc := copart.New(br, email, password, *cookiePath)
+	if err := sc.LoadSession(ctx); err != nil {
+		slog.Warn("no saved session — run: ferret copart login", "err", err)
+	}
+
+	lots, err := sc.RunSearchURL(ctx, *rawURL, *maxPages)
+	if err != nil {
+		fatal("scrape url", err)
+	}
+	ranked := scoring.RankAll(lots)
+	slog.Info("from-url complete", "total_lots", len(ranked))
+
+	out := os.Stdout
+	if *outFile != "" {
+		f, err := os.Create(*outFile)
+		if err != nil {
+			fatal("create output file", err)
+		}
+		defer f.Close()
+		out = f
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	enc.Encode(ranked)
+	if *outFile != "" {
+		fmt.Fprintf(os.Stderr, "wrote %d ranked lots to %s\n", len(ranked), *outFile)
+	}
 }
 
 func runCopartBid(ctx context.Context, args []string) {
