@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"net/url"
 	"runtime"
 	"time"
 
@@ -42,14 +43,44 @@ func New(opts Options) (*Browser, error) {
 		l = l.Set("no-sandbox", "")
 	}
 
+	// Authenticated proxy: Chrome can't auth via --proxy-server (407s), so we
+	// strip the credentials from the URL, pass only host:port to Chrome, and
+	// answer the proxy auth challenge over CDP's Fetch domain (HandleAuth).
+	var proxyUser, proxyPass string
 	if opts.ProxyURL != "" {
-		l = l.Proxy(opts.ProxyURL)
+		if pu, err := url.Parse(opts.ProxyURL); err == nil && pu.Host != "" {
+			if pu.User != nil {
+				proxyUser = pu.User.Username()
+				proxyPass, _ = pu.User.Password()
+			}
+			scheme := pu.Scheme
+			if scheme == "" {
+				scheme = "http"
+			}
+			l = l.Proxy(scheme + "://" + pu.Host) // host:port, no creds
+		} else {
+			l = l.Proxy(opts.ProxyURL)
+		}
 	}
 
 	u := l.MustLaunch()
 
 	b := rod.New().ControlURL(u).MustConnect()
 	b.MustIgnoreCertErrors(true)
+
+	// Handle proxy auth challenges (407) for the browser session. Chrome caches
+	// proxy credentials after the first success; re-arm in a loop so later
+	// connections through the proxy are also covered. Exits when the browser closes.
+	if proxyUser != "" {
+		go func() {
+			defer func() { _ = recover() }()
+			for {
+				if err := b.HandleAuth(proxyUser, proxyPass)(); err != nil {
+					return
+				}
+			}
+		}()
+	}
 
 	// Clear any stale cookies from previous sessions
 	b.MustSetCookies()
