@@ -3,6 +3,10 @@
 # Runs at 5am PDT via cron on the Hetzner server.
 set -euo pipefail
 
+# Group-writable output so the www-data web service (lookup "Analyze", etc.)
+# can also write data/raw + data/images. Pairs with setgid on those dirs.
+umask 002
+
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$DIR"
 
