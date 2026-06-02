@@ -144,7 +144,11 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 	// Give Angular time to render newly-visible sections
 	time.Sleep(500 * time.Millisecond)
 
-	bodyText, err := page.MustElement("body").Text()
+	bodyEl, err := page.Timeout(20 * time.Second).Element("body")
+	if err != nil {
+		return nil, fmt.Errorf("page body not found (slow/blocked load): %w", err)
+	}
+	bodyText, err := bodyEl.Text()
 	if err != nil {
 		return nil, fmt.Errorf("get body text: %w", err)
 	}
