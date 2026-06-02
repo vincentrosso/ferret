@@ -170,15 +170,18 @@ func resolveModelSlug(page *rod.Page, brand, model string) string {
 	}
 
 	target := strings.ToUpper(strings.TrimSpace(model))
-	bestSlug, bestLen := "", 0
+	// Prefer the BASE model — the shortest label that is a prefix of our model
+	// (e.g. "RAV4 XLE" → "RAV4", not "RAV4 XLE"). The base model has the largest
+	// pool of sold lots, giving a robust median; trim-specific slugs are tiny,
+	// noisy samples (rav4_xle returned $4,000 from a sliver vs rav4's $16,513/270).
+	bestSlug, bestLen := "", 1<<30
 	for _, m := range reModelOpt.FindAllStringSubmatch(html, -1) {
 		slug, label := m[1], strings.ToUpper(strings.TrimSpace(m[2]))
 		if slug == "" || label == "" {
 			continue
 		}
-		// label must be a prefix of our model (so base models match trims)
 		if strings.HasPrefix(target+" ", label+" ") || target == label {
-			if len(label) > bestLen {
+			if len(label) < bestLen {
 				bestLen, bestSlug = len(label), slug
 			}
 		}
