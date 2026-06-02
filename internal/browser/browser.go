@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime"
 	"time"
 
@@ -27,8 +28,9 @@ type Options struct {
 }
 
 type Browser struct {
-	rod  *rod.Browser
-	opts Options
+	rod         *rod.Browser
+	opts        Options
+	userDataDir string // unique temp dir, removed on Close
 }
 
 func New(opts Options) (*Browser, error) {
@@ -49,6 +51,14 @@ func New(opts Options) (*Browser, error) {
 	// writable when the FastAPI service runs us as www-data.
 	if path, ok := launcher.LookPath(); ok {
 		l = l.Bin(path)
+	}
+
+	// Unique, writable user-data-dir per launch. go-rod's default (/tmp/rod/...)
+	// gets owned by whoever launched first (root via cron) and then blocks the
+	// www-data service. os.MkdirTemp is owned by the current user.
+	userDataDir, _ := os.MkdirTemp("", "rod-userdata-")
+	if userDataDir != "" {
+		l = l.UserDataDir(userDataDir)
 	}
 
 	// Required when running as root on Linux (VPS/server).
@@ -80,7 +90,7 @@ func New(opts Options) (*Browser, error) {
 	// Clear any stale cookies from previous sessions
 	b.MustSetCookies()
 
-	return &Browser{rod: b, opts: opts}, nil
+	return &Browser{rod: b, opts: opts, userDataDir: userDataDir}, nil
 }
 
 // startProxyRelay listens on a local port and forwards Chrome's connections to
@@ -187,6 +197,9 @@ func (b *Browser) Rod() *rod.Browser { return b.rod }
 
 func (b *Browser) Close() {
 	b.rod.MustClose()
+	if b.userDataDir != "" {
+		_ = os.RemoveAll(b.userDataDir)
+	}
 }
 
 const defaultUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
