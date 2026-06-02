@@ -155,22 +155,60 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 
 	// ── regex-based extractions (fast, works on body text) ────────────────
 
-	// VIN: three-layer extraction — DOM label → JS innerText scan → body regex
+	// VIN: multi-layer extraction
+	// 1. DOM label (dt/th/label)
 	res.VIN = strings.ToUpper(strings.TrimSpace(domValue(page, "vin", "vin number", "vehicle identification number")))
+
+	// 2. JS: scan innerText, input values, data attributes, and full innerHTML
 	if res.VIN == "" {
-		// JavaScript scan: find any standalone 17-char VIN string in the rendered page
 		if r, err := page.Eval(`() => {
-			var m = (document.body.innerText || '').match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
-			return m ? m[0] : '';
-		}`); err == nil {
+			var re = /\b[A-HJ-NPR-Z0-9]{17}\b/;
+			// Check visible text
+			var m = (document.body.innerText || '').match(re);
+			if (m) return m[0];
+			// Check all input values (VIN often in readonly input)
+			for (var el of document.querySelectorAll('input, [value]')) {
+				var v = (el.value || el.getAttribute('value') || '').trim().toUpperCase();
+				if (re.test(v)) return v;
+			}
+			// Check full innerHTML (may be in data-* or hidden text)
+			var html = document.body.innerHTML;
+			m = html.match(/[A-HJ-NPR-Z0-9]{17}/g);
+			if (m) {
+				for (var c of m) {
+					if (re.test(c)) return c;
+				}
+			}
+			return '';
+		}`); err == nil && r.Value.Str() != "" {
 			res.VIN = strings.TrimSpace(r.Value.Str())
 		}
 	}
+
+	// 3. Try clicking a "show VIN" or "reveal" button, then re-scan
 	if res.VIN == "" {
-		// Body text regex fallback
+		for _, xp := range []string{
+			`//*[contains(translate(text(),'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'SHOW VIN')]`,
+			`//*[contains(translate(text(),'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'REVEAL VIN')]`,
+			`//*[contains(translate(text(),'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'VIEW VIN')]`,
+		} {
+			if el, err := page.Timeout(1 * time.Second).ElementX(xp); err == nil {
+				el.Click(proto.InputMouseButtonLeft, 1) //nolint:errcheck
+				time.Sleep(800 * time.Millisecond)
+				if r, err := page.Eval(`() => { var m = document.body.innerText.match(/\b[A-HJ-NPR-Z0-9]{17}\b/); return m ? m[0] : ''; }`); err == nil {
+					res.VIN = r.Value.Str()
+				}
+				break
+			}
+		}
+	}
+
+	// 4. Body text regex fallback
+	if res.VIN == "" {
 		res.VIN = reMatch(reVIN, bodyText, 1)
 	}
-	// Validate — VINs contain only A-H, J-N, P-R, S-Z, 0-9 (no I, O, Q)
+
+	// Validate charset — VINs never contain I, O, Q
 	if res.VIN != "" && !regexp.MustCompile(`^[A-HJ-NPR-Z0-9]{17}$`).MatchString(res.VIN) {
 		res.VIN = ""
 	}
