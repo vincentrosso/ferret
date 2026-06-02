@@ -64,12 +64,19 @@ func ScrapeAuctionHistory(makeName, model string, year int, proxyURL string) (*A
 	}
 	defer br.Close()
 
+	// Hard 60s budget for the whole scrape — anything slower is treated as a
+	// failure (a dead proxy / unsolved Cloudflare won't recover). Bounded
+	// per-step timeouts ensure defer br.Close() runs and Chrome is cleaned up.
+	deadline := time.Now().Add(55 * time.Second)
+	const navTimeout = 18 * time.Second
+	overBudget := func() bool { return time.Now().After(deadline) }
+
 	page, err := br.NewPage("https://saleshistory.org/")
 	if err != nil {
 		return nil, fmt.Errorf("open homepage: %w", err)
 	}
-	page.MustWaitLoad()
-	time.Sleep(4 * time.Second) // let Cloudflare clear
+	_ = page.Timeout(navTimeout).WaitLoad() // partial load OK (Cloudflare/SPA)
+	time.Sleep(3 * time.Second)             // let Cloudflare clear
 
 	brand := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(makeName), " ", "_"))
 
@@ -80,15 +87,18 @@ func ScrapeAuctionHistory(makeName, model string, year int, proxyURL string) (*A
 	}
 	res.ModelSlug = slug
 
+	if overBudget() {
+		res.Error = "timed out clearing Cloudflare (>60s) — proxy slow or challenged"
+		return res, nil
+	}
+
 	catURL := fmt.Sprintf(
 		"https://saleshistory.org/catalog/%s/%s/1/%d-%d/0-100000/",
 		brand, slug, year-1, year+1,
 	)
-	if err := page.Navigate(catURL); err != nil {
-		return nil, fmt.Errorf("navigate catalog: %w", err)
-	}
-	page.MustWaitLoad()
-	time.Sleep(5 * time.Second) // client-side lot render
+	_ = page.Timeout(navTimeout).Navigate(catURL)
+	_ = page.Timeout(navTimeout).WaitLoad()
+	time.Sleep(4 * time.Second) // client-side lot render
 
 	vinHost := firstVINHost(page)
 	if vinHost == "" {
@@ -96,13 +106,21 @@ func ScrapeAuctionHistory(makeName, model string, year int, proxyURL string) (*A
 		return res, nil
 	}
 
-	if err := page.Navigate("https://" + vinHost + "/"); err != nil {
-		return nil, fmt.Errorf("navigate detail: %w", err)
+	if overBudget() {
+		res.Error = "timed out before detail page (>60s)"
+		return res, nil
 	}
-	page.MustWaitLoad()
-	time.Sleep(4 * time.Second)
 
-	body, err := page.MustElement("body").Text()
+	_ = page.Timeout(navTimeout).Navigate("https://" + vinHost + "/")
+	_ = page.Timeout(navTimeout).WaitLoad()
+	time.Sleep(3 * time.Second)
+
+	bodyEl, err := page.Timeout(navTimeout).Element("body")
+	if err != nil {
+		res.Error = "detail page body not found within timeout"
+		return res, nil
+	}
+	body, err := bodyEl.Text()
 	if err != nil {
 		return nil, fmt.Errorf("read detail body: %w", err)
 	}
