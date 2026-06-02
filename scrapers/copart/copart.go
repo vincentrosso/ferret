@@ -195,10 +195,16 @@ func (s *Scraper) RunSearchURL(ctx context.Context, rawURL string, maxPages int)
 	}
 	defer page.Close() //nolint:errcheck
 
-	// Wait for Angular to populate the table
+	// Wait for Angular to populate the table. Through a (slow, rotating)
+	// residential proxy the first load can be slow or land on a throttled IP,
+	// so allow more time and reload once before giving up.
 	rowSel := `table tbody tr`
-	if _, err := page.Timeout(30 * time.Second).Element(rowSel); err != nil {
-		return nil, fmt.Errorf("no results table after 30s — may need to re-login: %w", err)
+	if _, err := page.Timeout(40 * time.Second).Element(rowSel); err != nil {
+		slog.Warn("results table slow — reloading once", "err", err)
+		_ = page.Navigate(rawURL)
+		if _, err := page.Timeout(40 * time.Second).Element(rowSel); err != nil {
+			return nil, fmt.Errorf("no results table after 2×40s — may be throttled/login: %w", err)
+		}
 	}
 	time.Sleep(1500 * time.Millisecond) // let all rows render
 
