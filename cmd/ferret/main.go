@@ -261,27 +261,43 @@ func runCopartDetail(ctx context.Context, args []string) {
 		go func(workerID int) {
 			defer wg.Done()
 
-			// Per-worker sticky session: hold one residential IP for this
-			// worker's whole run. Copart detail panels never render when the
-			// proxy IP rotates mid-load ("detail panel not found after 20s") —
-			// a stable IP fixes it. No-op when -proxy is empty.
-			stickyURL := browser.StickyProxy(*proxy, fmt.Sprintf("dtl%d%x", workerID, time.Now().UnixNano()))
-			br, err := browser.New(browser.Options{
-				Headless: true,
-				UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
-					"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-				ProxyURL: stickyURL,
-			})
-			if err != nil {
+			// Each scrape runs through a sticky session: one stable residential
+			// IP for the whole render. Rotating IPs make the detail panel never
+			// load ("panel not found after 20s"); a fresh browser = a fresh IP,
+			// so we relaunch to retry a failed lot on a different IP. No-op when
+			// -proxy is empty.
+			var br *browser.Browser
+			var sc *copart.Scraper
+			mkSession := func() error {
+				if br != nil {
+					br.Close()
+				}
+				sticky := browser.StickyProxy(*proxy, fmt.Sprintf("dtl%d%x", workerID, time.Now().UnixNano()))
+				b, err := browser.New(browser.Options{
+					Headless: true,
+					UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+						"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+					ProxyURL: sticky,
+				})
+				if err != nil {
+					return err
+				}
+				br = b
+				sc = copart.New(br, email, password, *cookiePath)
+				if err := sc.LoadSession(ctx); err != nil {
+					slog.Warn("worker: no saved session", "err", err)
+				}
+				return nil
+			}
+			if err := mkSession(); err != nil {
 				slog.Error("worker: launch browser", "err", err)
 				return
 			}
-			defer br.Close()
-
-			sc := copart.New(br, email, password, *cookiePath)
-			if err := sc.LoadSession(ctx); err != nil {
-				slog.Warn("worker: no saved session", "err", err)
-			}
+			defer func() {
+				if br != nil {
+					br.Close()
+				}
+			}()
 
 			for j := range jobs {
 				imgDir := ""
@@ -289,26 +305,40 @@ func runCopartDetail(ctx context.Context, args []string) {
 					imgDir = filepath.Join(*dataDir, "images")
 				}
 
-				detail, err := sc.ScrapeDetail(ctx, j.url, imgDir)
-				if err != nil {
-					slog.Error("detail failed", "url", j.url, "err", err)
+				// Up to 3 tries, each on a FRESH sticky IP — one challenged IP →
+				// "panel not found", a different IP usually renders fine.
+				const maxTries = 3
+				saved := false
+				for try := 0; try < maxTries && !saved; try++ {
+					detail, derr := sc.ScrapeDetail(ctx, j.url, imgDir)
+					if derr != nil {
+						slog.Warn("detail attempt failed", "url", j.url, "try", try+1, "err", derr)
+						if try < maxTries-1 {
+							if rerr := mkSession(); rerr != nil {
+								slog.Error("worker: relaunch for retry", "err", rerr)
+								break
+							}
+						}
+						continue
+					}
+					path, serr := st.SaveJSON(detail.LotNumber, detail)
+					if serr != nil {
+						slog.Error("save JSON", "lot", detail.LotNumber, "err", serr)
+					} else {
+						slog.Info("saved", "lot", detail.LotNumber, "path", path,
+							"vin", detail.VIN, "zip", detail.ImageZip, "try", try+1)
+					}
+					mu.Lock()
+					succeeded++
+					mu.Unlock()
+					saved = true
+				}
+				if !saved {
+					slog.Error("detail failed (all tries)", "url", j.url)
 					mu.Lock()
 					failed++
 					mu.Unlock()
-					continue
 				}
-
-				path, err := st.SaveJSON(detail.LotNumber, detail)
-				if err != nil {
-					slog.Error("save JSON", "lot", detail.LotNumber, "err", err)
-				} else {
-					slog.Info("saved", "lot", detail.LotNumber, "path", path,
-						"vin", detail.VIN, "zip", detail.ImageZip)
-				}
-
-				mu.Lock()
-				succeeded++
-				mu.Unlock()
 			}
 		}(w)
 	}
