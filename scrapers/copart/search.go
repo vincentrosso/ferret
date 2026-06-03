@@ -138,9 +138,10 @@ func titleFilters(groups []string) []string {
 // ── Row parsing helpers ───────────────────────────────────────────────────
 
 var (
-	reLotNum  = regexp.MustCompile(`/lot/(\d+)`)
-	reMoney   = regexp.MustCompile(`[\d,]+(?:\.\d+)?`)
-	reOdoText = regexp.MustCompile(`^([\d,]+)\s*[A-Z]?$`)
+	reLotNum   = regexp.MustCompile(`/lot/(\d+)`)
+	reMoney    = regexp.MustCompile(`[\d,]+(?:\.\d+)?`)
+	reOdoText  = regexp.MustCompile(`^([\d,]+)\s*[A-Z]?$`)
+	reSaleTime = regexp.MustCompile(`(?i)\d{1,2}:\d{2}\s*(AM|PM)`) // auction time cell, e.g. "10:00 AM PDT"
 )
 
 // parseLotRow extracts a Lot from the Copart 2025 search result row (15 columns).
@@ -222,10 +223,17 @@ func parseLotRow(lotURL string, cells []string, now time.Time) (Lot, bool) {
 		}
 	}
 
-	// Auction time (col 10): e.g. "10:00 AM PDT" — the soonest-first sort key on
-	// the lane view. (The authoritative full sale date comes from the detail
-	// scrape during enrich and overrides this.)
-	lot.SaleDate = strings.TrimSpace(strings.Split(cell(10), "\n")[0])
+	// Auction time — Copart's column order shifts between search variants, so
+	// scan for whichever cell looks like a time ("10:00 AM PDT") rather than a
+	// fixed index. Soonest-first sort key on the lane; the authoritative full
+	// sale date comes from the detail scrape during enrich and overrides this.
+	for i := 0; i < len(cells); i++ {
+		c := strings.TrimSpace(strings.Split(cells[i], "\n")[0])
+		if reSaleTime.MatchString(c) {
+			lot.SaleDate = c
+			break
+		}
+	}
 
 	// Damage description (col 12): "HAIL"
 	lot.DamagePrimary = strings.TrimSpace(cell(12))
