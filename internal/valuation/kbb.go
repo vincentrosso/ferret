@@ -62,8 +62,14 @@ func ScrapeKBB(makeName, model string, year int, trim, proxyURL string) (*KBBRes
 	}
 	defer br.Close()
 
-	deadline := time.Now().Add(28 * time.Second)
+	// KBB's value table is flaky through the rotating residential proxy: some
+	// IPs get challenged and the table never renders (~1 in 2 attempts). Each
+	// reload draws a fresh proxy IP, so up to 4 tries/slug pushes success past
+	// ~99% (≈70% per try). The 52s budget is the deliberate exception to the
+	// 60s scrape rule; the calling subprocess timeout (65s) accommodates it.
+	deadline := time.Now().Add(52 * time.Second)
 	const navTimeout = 10 * time.Second
+	const maxAttempts = 4
 	makeSlug := slugify(makeName)
 
 	page, err := br.NewPage("about:blank")
@@ -74,21 +80,27 @@ func ScrapeKBB(makeName, model string, year int, trim, proxyURL string) (*KBBRes
 	// Try progressively longer model slugs (base model first): "rav4", then
 	// "grand-cherokee", etc. First page with a value table wins. The value table
 	// can be slow to render through a (rotating) residential proxy, so give each
-	// load up to 2 tries — a reload draws a fresh proxy IP.
+	// load up to maxAttempts tries — a reload draws a fresh proxy IP.
 	var trims []KBBTrim
 	for _, slug := range modelSlugCandidates(model) {
 		url := fmt.Sprintf("https://www.kbb.com/%s/%s/%d/", makeSlug, slug, year)
-		for attempt := 0; attempt < 2; attempt++ {
-			if time.Now().After(deadline) {
+		for attempt := 0; attempt < maxAttempts; attempt++ {
+			// Cap each step to the time left so the 52s deadline is a near-hard
+			// cap — a fresh attempt's 10s timeouts can't stack past the budget
+			// and overrun the caller's 65s subprocess timeout.
+			step := navTimeout
+			if rem := time.Until(deadline); rem <= 0 {
 				break
+			} else if rem < step {
+				step = rem
 			}
-			_ = page.Timeout(navTimeout).Navigate(url)
-			_ = page.Timeout(navTimeout).WaitLoad()
+			_ = page.Timeout(step).Navigate(url)
+			_ = page.Timeout(step).WaitLoad()
 			time.Sleep(3 * time.Second)
 			page.Eval(`() => window.scrollTo(0, 1400)`) //nolint:errcheck — nudge lazy content
 			time.Sleep(1500 * time.Millisecond)
 
-			bodyEl, err := page.Timeout(navTimeout).Element("body")
+			bodyEl, err := page.Timeout(step).Element("body")
 			if err != nil {
 				continue
 			}
