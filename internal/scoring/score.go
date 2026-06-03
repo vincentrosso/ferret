@@ -2,7 +2,6 @@ package scoring
 
 import (
 	"strings"
-	"time"
 
 	"github.com/vincentrosso/ferret/scrapers/copart"
 )
