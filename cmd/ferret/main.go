@@ -144,14 +144,14 @@ func runCopartSearch(ctx context.Context, args []string) {
 	}
 
 	params := copart.SearchParams{
-		Makes:      makeList,
-		YearMin:    *yearMin,
-		YearMax:    *yearMax,
-		OdoMax:     *odoMax,
-		DateTo:     time.Now().AddDate(0, 0, *daysAhead),
+		Makes:       makeList,
+		YearMin:     *yearMin,
+		YearMax:     *yearMax,
+		OdoMax:      *odoMax,
+		DateTo:      time.Now().AddDate(0, 0, *daysAhead),
 		DamageCode:  *damage,
 		TitleGroups: strings.Split(*title, ","),
-		MaxPages:   *maxPages,
+		MaxPages:    *maxPages,
 	}
 
 	lots, err := sc.RunSearch(ctx, params)
@@ -866,19 +866,19 @@ func allImagesFromZip(zipPath string) []template.URL {
 
 // detailJSON is the subset of fields we need from data/raw/<lot>/detail.json.
 type detailJSON struct {
-	VIN             string `json:"vin"`
-	EngineType      string `json:"engine_type"`
-	Transmission    string `json:"transmission"`
-	Color           string `json:"color"`
-	BodyStyle       string `json:"body_style"`
-	DriveType       string `json:"drive_type"`
-	FuelType        string `json:"fuel_type"`
-	RunAndDrive     string `json:"run_and_drive"`
-	KeysPresent     string `json:"keys_present"`
-	AirbagsDeployed string `json:"airbags_deployed"`
-	ConditionGrade  string `json:"condition_grade"`
-	LossType        string `json:"loss_type"`
-	SaleDate        string `json:"sale_date"`
+	VIN               string `json:"vin"`
+	EngineType        string `json:"engine_type"`
+	Transmission      string `json:"transmission"`
+	Color             string `json:"color"`
+	BodyStyle         string `json:"body_style"`
+	DriveType         string `json:"drive_type"`
+	FuelType          string `json:"fuel_type"`
+	RunAndDrive       string `json:"run_and_drive"`
+	KeysPresent       string `json:"keys_present"`
+	AirbagsDeployed   string `json:"airbags_deployed"`
+	ConditionGrade    string `json:"condition_grade"`
+	LossType          string `json:"loss_type"`
+	SaleDate          string `json:"sale_date"`
 	ExteriorCondition []struct {
 		Panel  string `json:"panel"`
 		Damage string `json:"damage"`
