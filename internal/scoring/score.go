@@ -2,6 +2,7 @@ package scoring
 
 import (
 	"strings"
+	"time"
 
 	"github.com/vincentrosso/ferret/scrapers/copart"
 )
@@ -135,35 +136,21 @@ func mileageScore(odo int) int {
 	}
 }
 
-// maxAffordableYear is a budget gate: the user is buying ≤~$10k, and clean-title
-// hail lots from newer years reliably hammer well above that. Year is the only
-// price proxy available at scrape-scoring time (expected hammer price isn't
-// computed until the later valuation step). Bump this when the budget grows.
-const maxAffordableYear = 2023
-
 func yearScore(year int) int {
-	// Out of budget → sink below every eligible lot (stays visible, never ranks
-	// in the top picks). Penalty exceeds the max possible positive total (~85).
-	if year > maxAffordableYear {
-		return -1000
-	}
-	// Within the affordable pool, favor the recent-but-cheap sweet spot
-	// (2020–2023) and taper for older, higher-repair, slower-resale cars.
+	age := time.Now().Year() - year
 	switch {
-	case year >= 2022:
+	case age <= 1:
 		return 15
-	case year == 2021:
-		return 13
-	case year == 2020:
-		return 11
-	case year >= 2018:
-		return 8
-	case year >= 2015:
-		return 5
-	case year >= 2012:
+	case age == 2:
+		return 12
+	case age == 3:
+		return 9
+	case age == 4:
+		return 6
+	case age == 5:
 		return 3
 	default:
-		return 1
+		return 0
 	}
 }
 
