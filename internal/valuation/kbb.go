@@ -2,6 +2,7 @@ package valuation
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -51,76 +52,50 @@ func ScrapeKBB(makeName, model string, year int, trim, proxyURL string) (*KBBRes
 		Source: "kbb", ScrapedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	br, err := browser.New(browser.Options{
-		Headless: true,
-		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
-			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-		ProxyURL: proxyURL,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("launch browser: %w", err)
-	}
-	defer br.Close()
-
-	// KBB's value table is flaky through the rotating residential proxy: some
-	// IPs get challenged and the table never renders (~1 in 2 attempts). Each
-	// reload draws a fresh proxy IP, so up to 4 tries/slug pushes success past
-	// ~99% (≈70% per try). The 52s budget is the deliberate exception to the
-	// 60s scrape rule; the calling subprocess timeout (65s) accommodates it.
+	// KBB's value table is flaky through residential-proxy IPs: some get
+	// challenged and the table never renders. Each attempt pins a FRESH sticky
+	// session (one stable IP for that whole render — mid-render IP rotation is
+	// what trips the challenge); a failed attempt draws a new IP. Up to 4
+	// tries/slug. The 52s budget is the deliberate exception to the 60s scrape
+	// rule; the caller's 65s subprocess timeout accommodates it.
 	deadline := time.Now().Add(52 * time.Second)
 	const navTimeout = 10 * time.Second
 	const maxAttempts = 4
 	makeSlug := slugify(makeName)
 
-	page, err := br.NewPage("about:blank")
-	if err != nil {
-		return nil, fmt.Errorf("open page: %w", err)
-	}
-
 	// Try progressively longer model slugs (base model first): "rav4", then
-	// "grand-cherokee", etc. First page with a value table wins. The value table
-	// can be slow to render through a (rotating) residential proxy, so give each
-	// load up to maxAttempts tries — a reload draws a fresh proxy IP.
+	// "grand-cherokee", etc. First page with a value table wins.
 	var trims []KBBTrim
+outer:
 	for _, slug := range modelSlugCandidates(model) {
-		url := fmt.Sprintf("https://www.kbb.com/%s/%s/%d/", makeSlug, slug, year)
+		pageURL := fmt.Sprintf("https://www.kbb.com/%s/%s/%d/", makeSlug, slug, year)
 		for attempt := 0; attempt < maxAttempts; attempt++ {
 			// Cap each step to the time left so the 52s deadline is a near-hard
 			// cap — a fresh attempt's 10s timeouts can't stack past the budget
 			// and overrun the caller's 65s subprocess timeout.
 			step := navTimeout
 			if rem := time.Until(deadline); rem <= 0 {
-				break
+				break outer
 			} else if rem < step {
 				step = rem
 			}
-			_ = page.Timeout(step).Navigate(url)
-			_ = page.Timeout(step).WaitLoad()
-			time.Sleep(3 * time.Second)
-			page.Eval(`() => window.scrollTo(0, 1400)`) //nolint:errcheck — nudge lazy content
-			time.Sleep(1500 * time.Millisecond)
-
-			bodyEl, err := page.Timeout(step).Element("body")
+			// Fresh sticky IP per attempt (no-op for non-Smartproxy proxies).
+			sess := fmt.Sprintf("kbb%d%x", attempt, time.Now().UnixNano())
+			body, notFound, err := fetchKBBBody(pageURL, stickyProxy(proxyURL, sess), step)
 			if err != nil {
-				continue
+				continue // launch/render error → retry on a new IP
 			}
-			body, _ := bodyEl.Text()
-			if !strings.Contains(body, "Private Party Value") && !strings.Contains(body, "Trade-In Value") {
-				// Wrong slug → 404/redirect (no table, won't appear on retry).
-				// Slow render/challenged IP → reload once for a fresh IP.
-				if strings.Contains(strings.ToLower(body), "page not found") {
-					break // wrong slug; move to next candidate
-				}
-				continue // retry this slug (reload → new IP)
+			if notFound {
+				break // wrong slug (404) — won't appear on retry; next candidate
+			}
+			if body == "" {
+				continue // no value table on this IP → retry fresh
 			}
 			if parsed := parseKBBTrims(body); len(parsed) > 0 {
 				res.ModelSlug = slug
 				trims = parsed
-				break
+				break outer
 			}
-		}
-		if len(trims) > 0 {
-			break
 		}
 	}
 
@@ -137,6 +112,74 @@ func ScrapeKBB(makeName, model string, year int, trim, proxyURL string) (*KBBRes
 	res.PrivateParty = match.PrivateParty
 	res.FairPurchase = match.FairPurchase
 	return res, nil
+}
+
+// fetchKBBBody launches a browser through proxyURL, loads a KBB model page, and
+// returns its body text. notFound is true when KBB served a 404 ("page not
+// found") — a wrong slug that won't appear on retry. An empty body with
+// notFound=false means no value table rendered on this IP (retry on a fresh
+// one). A fresh browser per call is deliberate: the proxy (hence sticky IP) is
+// fixed at launch, so a per-attempt launch is how each retry gets a new IP.
+func fetchKBBBody(pageURL, proxyURL string, step time.Duration) (body string, notFound bool, err error) {
+	br, err := browser.New(browser.Options{
+		Headless: true,
+		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+		ProxyURL: proxyURL,
+	})
+	if err != nil {
+		return "", false, fmt.Errorf("launch browser: %w", err)
+	}
+	defer br.Close()
+
+	page, err := br.NewPage("about:blank")
+	if err != nil {
+		return "", false, fmt.Errorf("open page: %w", err)
+	}
+	_ = page.Timeout(step).Navigate(pageURL)
+	_ = page.Timeout(step).WaitLoad()
+	time.Sleep(3 * time.Second)
+	page.Eval(`() => window.scrollTo(0, 1400)`) //nolint:errcheck — nudge lazy content
+	time.Sleep(1500 * time.Millisecond)
+
+	bodyEl, err := page.Timeout(step).Element("body")
+	if err != nil {
+		return "", false, err
+	}
+	text, _ := bodyEl.Text()
+	if strings.Contains(strings.ToLower(text), "page not found") {
+		return "", true, nil
+	}
+	if !strings.Contains(text, "Private Party Value") && !strings.Contains(text, "Trade-In Value") {
+		return "", false, nil // challenged/slow IP — no table; caller retries
+	}
+	return text, false, nil
+}
+
+// stickyProxy injects a fresh Smartproxy sticky session into proxyURL's
+// username (e.g. "smart-exoprox" → "smart-exoprox_area-US_life-5_session-ID"),
+// so one browser launch holds a single residential IP for the whole render.
+// Each call (per attempt) passes a new sessionID → a new IP on retry. No-op for
+// empty URLs or non-Smartproxy proxies, so it's safe on any proxy string.
+func stickyProxy(proxyURL, sessionID string) string {
+	if proxyURL == "" {
+		return proxyURL
+	}
+	u, err := url.Parse(proxyURL)
+	if err != nil || u.User == nil || !strings.Contains(u.Host, "smartproxy") {
+		return proxyURL
+	}
+	user := u.User.Username()
+	pw, _ := u.User.Password()
+	// Strip any session modifiers we manage, then re-add a fresh set.
+	for _, m := range []string{"_session-", "_life-", "_area-"} {
+		if i := strings.Index(user, m); i >= 0 {
+			user = user[:i]
+		}
+	}
+	user = fmt.Sprintf("%s_area-US_life-5_session-%s", user, sessionID)
+	u.User = url.UserPassword(user, pw)
+	return u.String()
 }
 
 // parseKBBTrims extracts trim rows from the value table region of the page text.
