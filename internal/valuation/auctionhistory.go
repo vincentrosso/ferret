@@ -53,11 +53,14 @@ func ScrapeAuctionHistory(makeName, model string, year int, proxyURL string) (*A
 		Source: "saleshistory", ScrapedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
+	// Sticky session: hold one residential IP across the home→catalog→detail
+	// flow. saleshistory (Cloudflare) stalls when the rotating proxy changes IP
+	// mid-flow ("timed out before detail page" / "could not parse aggregate").
 	br, err := browser.New(browser.Options{
 		Headless: true,
 		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
 			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-		ProxyURL: proxyURL,
+		ProxyURL: browser.StickyProxy(proxyURL, fmt.Sprintf("ah%x", time.Now().UnixNano())),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("launch browser: %w", err)
@@ -76,7 +79,7 @@ func ScrapeAuctionHistory(makeName, model string, year int, proxyURL string) (*A
 		return nil, fmt.Errorf("open homepage: %w", err)
 	}
 	_ = page.Timeout(navTimeout).WaitLoad() // partial load OK (Cloudflare/SPA)
-	time.Sleep(2 * time.Second) // let Cloudflare clear
+	time.Sleep(2 * time.Second)             // let Cloudflare clear
 
 	brand := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(makeName), " ", "_"))
 
