@@ -427,6 +427,7 @@ func runCopartAnalyze(_ context.Context, args []string) {
 	inFile := fs.String("in", "lots-ranked.json", "ranked lots JSON from 'copart search'")
 	dataDir := fs.String("data", "data", "data directory (for raw/ and images/)")
 	outFile := fs.String("out", "lots-analyzed.json", "output file with scores + damage")
+	includeFuture := fs.Bool("include-future", false, "analyze lots even if sale_status=future (check-a-sale wants pre-auction lots)")
 	fs.Parse(args)
 
 	apiKey := mustEnv("ANTHROPIC_API_KEY")
@@ -457,7 +458,7 @@ func runCopartAnalyze(_ context.Context, args []string) {
 				SaleDate   string `json:"sale_date"`
 			}
 			if json.NewDecoder(f).Decode(&d) == nil {
-				if d.SaleStatus == "future" {
+				if d.SaleStatus == "future" && !*includeFuture {
 					slog.Info("skipping future lot", "lot", lot.LotNumber)
 					f.Close()
 					continue
