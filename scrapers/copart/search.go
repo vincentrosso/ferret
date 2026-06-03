@@ -13,17 +13,17 @@ import (
 // SearchParams controls what the Copart search URL filters on.
 // Zero values produce sensible defaults (hail damage, clean title, past 14 days).
 type SearchParams struct {
-	Makes      []string  // e.g. ["TOYOTA","HONDA"] — defaults to common hail-arb makes
-	YearMin    int       // inclusive; defaults to 4 years ago
-	YearMax    int       // inclusive; defaults to current year + 2
-	OdoMax     int       // max odometer; defaults to 85 000
-	DateFrom   time.Time // auction start; defaults to today
-	DateTo     time.Time // auction end; defaults to today + 5 days
-	DamageCode  string   // Copart filter code; defaults to DAMAGECODE_HL (hail)
-	TitleGroups []string // one or more title group codes; defaults to [TITLEGROUP_C]
-	             	     // known values: TITLEGROUP_C (clean), TITLEGROUP_S (salvage)
-	Sort        []string // Solr sort fields; defaults to Copart's standard date sort
-	MaxPages    int      // 0 = unlimited
+	Makes       []string  // e.g. ["TOYOTA","HONDA"] — defaults to common hail-arb makes
+	YearMin     int       // inclusive; defaults to 4 years ago
+	YearMax     int       // inclusive; defaults to current year + 2
+	OdoMax      int       // max odometer; defaults to 85 000
+	DateFrom    time.Time // auction start; defaults to today
+	DateTo      time.Time // auction end; defaults to today + 5 days
+	DamageCode  string    // Copart filter code; defaults to DAMAGECODE_HL (hail)
+	TitleGroups []string  // one or more title group codes; defaults to [TITLEGROUP_C]
+	// known values: TITLEGROUP_C (clean), TITLEGROUP_S (salvage)
+	Sort     []string // Solr sort fields; defaults to Copart's standard date sort
+	MaxPages int      // 0 = unlimited
 }
 
 func (p *SearchParams) defaults() {
@@ -146,21 +146,22 @@ var (
 // parseLotRow extracts a Lot from the Copart 2025 search result row (15 columns).
 //
 // Actual column layout observed via DOM inspection:
-//   [0]  checkbox (empty)
-//   [1]  thumbnail image
-//   [2]  lot number + "Watch" link
-//   [3]  year
-//   [4]  make
-//   [5]  model
-//   [6]  ? (often "0")
-//   [7]  damage code short (e.g. "HL")
-//   [8]  sale status / lane (e.g. "Future")
-//   [9]  odometer (e.g. "81946 A")
-//   [10] auction time (e.g. "10:00 AM PDT")
-//   [11] title type + state (e.g. "CT - KS")
-//   [12] damage description (e.g. "HAIL")
-//   [13] current bid (e.g. "Current bid : $0.00\nBid now")
-//   [14] (empty)
+//
+//	[0]  checkbox (empty)
+//	[1]  thumbnail image
+//	[2]  lot number + "Watch" link
+//	[3]  year
+//	[4]  make
+//	[5]  model
+//	[6]  ? (often "0")
+//	[7]  damage code short (e.g. "HL")
+//	[8]  sale status / lane (e.g. "Future")
+//	[9]  odometer (e.g. "81946 A")
+//	[10] auction time (e.g. "10:00 AM PDT")
+//	[11] title type + state (e.g. "CT - KS")
+//	[12] damage description (e.g. "HAIL")
+//	[13] current bid (e.g. "Current bid : $0.00\nBid now")
+//	[14] (empty)
 func parseLotRow(lotURL string, cells []string, now time.Time) (Lot, bool) {
 	lotM := reLotNum.FindStringSubmatch(lotURL)
 	if len(lotM) < 2 {
@@ -221,6 +222,11 @@ func parseLotRow(lotURL string, cells []string, now time.Time) (Lot, bool) {
 		}
 	}
 
+	// Auction time (col 10): e.g. "10:00 AM PDT" — the soonest-first sort key on
+	// the lane view. (The authoritative full sale date comes from the detail
+	// scrape during enrich and overrides this.)
+	lot.SaleDate = strings.TrimSpace(strings.Split(cell(10), "\n")[0])
+
 	// Damage description (col 12): "HAIL"
 	lot.DamagePrimary = strings.TrimSpace(cell(12))
 
@@ -239,4 +245,3 @@ func parseLotRow(lotURL string, cells []string, now time.Time) (Lot, bool) {
 
 	return lot, true
 }
-
