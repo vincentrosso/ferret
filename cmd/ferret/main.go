@@ -258,14 +258,19 @@ func runCopartDetail(ctx context.Context, args []string) {
 
 	for w := 0; w < *workers; w++ {
 		wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer wg.Done()
 
+			// Per-worker sticky session: hold one residential IP for this
+			// worker's whole run. Copart detail panels never render when the
+			// proxy IP rotates mid-load ("detail panel not found after 20s") —
+			// a stable IP fixes it. No-op when -proxy is empty.
+			stickyURL := browser.StickyProxy(*proxy, fmt.Sprintf("dtl%d%x", workerID, time.Now().UnixNano()))
 			br, err := browser.New(browser.Options{
 				Headless: true,
 				UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
 					"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-				ProxyURL: *proxy,
+				ProxyURL: stickyURL,
 			})
 			if err != nil {
 				slog.Error("worker: launch browser", "err", err)
@@ -305,7 +310,7 @@ func runCopartDetail(ctx context.Context, args []string) {
 				succeeded++
 				mu.Unlock()
 			}
-		}()
+		}(w)
 	}
 
 	wg.Wait()

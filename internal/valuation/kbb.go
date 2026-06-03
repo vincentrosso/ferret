@@ -2,7 +2,6 @@ package valuation
 
 import (
 	"fmt"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -81,7 +80,7 @@ outer:
 			}
 			// Fresh sticky IP per attempt (no-op for non-Smartproxy proxies).
 			sess := fmt.Sprintf("kbb%d%x", attempt, time.Now().UnixNano())
-			body, notFound, err := fetchKBBBody(pageURL, stickyProxy(proxyURL, sess), step)
+			body, notFound, err := fetchKBBBody(pageURL, browser.StickyProxy(proxyURL, sess), step)
 			if err != nil {
 				continue // launch/render error → retry on a new IP
 			}
@@ -154,32 +153,6 @@ func fetchKBBBody(pageURL, proxyURL string, step time.Duration) (body string, no
 		return "", false, nil // challenged/slow IP — no table; caller retries
 	}
 	return text, false, nil
-}
-
-// stickyProxy injects a fresh Smartproxy sticky session into proxyURL's
-// username (e.g. "smart-exoprox" → "smart-exoprox_area-US_life-5_session-ID"),
-// so one browser launch holds a single residential IP for the whole render.
-// Each call (per attempt) passes a new sessionID → a new IP on retry. No-op for
-// empty URLs or non-Smartproxy proxies, so it's safe on any proxy string.
-func stickyProxy(proxyURL, sessionID string) string {
-	if proxyURL == "" {
-		return proxyURL
-	}
-	u, err := url.Parse(proxyURL)
-	if err != nil || u.User == nil || !strings.Contains(u.Host, "smartproxy") {
-		return proxyURL
-	}
-	user := u.User.Username()
-	pw, _ := u.User.Password()
-	// Strip any session modifiers we manage, then re-add a fresh set.
-	for _, m := range []string{"_session-", "_life-", "_area-"} {
-		if i := strings.Index(user, m); i >= 0 {
-			user = user[:i]
-		}
-	}
-	user = fmt.Sprintf("%s_area-US_life-5_session-%s", user, sessionID)
-	u.User = url.UserPassword(user, pw)
-	return u.String()
 }
 
 // parseKBBTrims extracts trim rows from the value table region of the page text.
