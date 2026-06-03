@@ -321,6 +321,20 @@ func runCopartDetail(ctx context.Context, args []string) {
 						}
 						continue
 					}
+					// Empty parse (no error, but a challenged/slow IP yielded a blank
+					// page): DO NOT save — an all-null stub would clobber a good
+					// cached detail and break KBB/Marketcheck on the lookup page.
+					// Retry on a fresh IP instead.
+					if detail.Year == 0 && detail.Make == "" && detail.VIN == "" {
+						slog.Warn("detail parsed empty, retrying on fresh IP", "url", j.url, "try", try+1)
+						if try < maxTries-1 {
+							if rerr := mkSession(); rerr != nil {
+								slog.Error("worker: relaunch for retry", "err", rerr)
+								break
+							}
+						}
+						continue
+					}
 					path, serr := st.SaveJSON(detail.LotNumber, detail)
 					if serr != nil {
 						slog.Error("save JSON", "lot", detail.LotNumber, "err", serr)
