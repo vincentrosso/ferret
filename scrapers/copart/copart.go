@@ -336,25 +336,10 @@ func setRowsPerPage(page *rod.Page, n int) {
 		}
 	}
 	if label == nil {
-		// Debug probe: what paginator/dropdown structure IS present?
-		if obj, err := page.Eval(`() => {
-			const ariaLabels = [...document.querySelectorAll('[aria-label]')]
-				.map(e => e.getAttribute('aria-label'))
-				.filter(x => /page|row|rpp/i.test(x));
-			const pag = document.querySelector('.p-paginator');
-			return JSON.stringify({
-				paginators: document.querySelectorAll('.p-paginator').length,
-				dropdowns:  document.querySelectorAll('.p-dropdown').length,
-				rppOptions: document.querySelectorAll('.p-paginator-rpp-options').length,
-				selects:    document.querySelectorAll('p-select, .p-select').length,
-				ariaLabels: ariaLabels,
-				paginatorHTML: pag ? pag.outerHTML.slice(0, 600) : null,
-			});
-		}`); err == nil {
-			slog.Warn("rows-per-page dropdown not found — DOM probe", "dom", obj.Value.String())
-		} else {
-			slog.Warn("rows-per-page dropdown not found — default page size", "err", err)
-		}
+		// No paginator on this view (the nationwide vehicle-search-damage page
+		// renders no rows-per-page control for our cold session) — stay at the
+		// default size. Present on single-sale saleListResult pages.
+		slog.Warn("rows-per-page control not present — default page size")
 		page.Eval(`() => window.scrollTo(0, 0)`) //nolint:errcheck
 		return
 	}
