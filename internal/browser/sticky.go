@@ -1,9 +1,9 @@
 package browser
 
 import (
-	"fmt"
-	"net/url"
-	"strings"
+	"time"
+
+	"github.com/vincentrosso/proxypool"
 )
 
 // StickyProxy injects a fresh Smartproxy sticky session into proxyURL's username
@@ -13,23 +13,9 @@ import (
 // on KBB and Copart detail pages; a stable IP fixes it. Pass a new sessionID per
 // attempt/worker to draw a new IP. No-op for empty URLs or non-Smartproxy
 // proxies, so it's safe to call on any proxy string.
+//
+// Thin wrapper over the shared proxypool module so every scraper (ferret + the
+// hammer watcher) formats sticky sessions identically — one source of truth.
 func StickyProxy(proxyURL, sessionID string) string {
-	if proxyURL == "" {
-		return proxyURL
-	}
-	u, err := url.Parse(proxyURL)
-	if err != nil || u.User == nil || !strings.Contains(u.Host, "smartproxy") {
-		return proxyURL
-	}
-	user := u.User.Username()
-	pw, _ := u.User.Password()
-	// Strip any session modifiers we manage, then re-add a fresh set.
-	for _, m := range []string{"_session-", "_life-", "_area-"} {
-		if i := strings.Index(user, m); i >= 0 {
-			user = user[:i]
-		}
-	}
-	user = fmt.Sprintf("%s_area-US_life-5_session-%s", user, sessionID)
-	u.User = url.UserPassword(user, pw)
-	return u.String()
+	return proxypool.Sticky(proxyURL, "US", 5*time.Minute, sessionID)
 }
