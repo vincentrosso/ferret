@@ -322,27 +322,51 @@ func extractRows(_ context.Context, page *rod.Page, seen map[string]bool) ([]Lot
 // (e.g. 100). Best-effort: if the control isn't found we just stay at the default
 // page size — never fatal. Cuts page count (and proxy round-trips) ~5×.
 func setRowsPerPage(page *rod.Page, n int) {
-	trigger, err := page.Timeout(8 * time.Second).Element(`[aria-label="Rows per page"]`)
+	want := fmt.Sprintf("%d", n)
+	// The combobox label (a <span role=combobox aria-label="Rows per page">) shows
+	// the current size and is the click target; the options only render into a
+	// <p-overlay> once it opens, so poll for them rather than fixed-sleep.
+	label, err := page.Timeout(8 * time.Second).Element(`[aria-label="Rows per page"]`)
 	if err != nil {
 		slog.Warn("rows-per-page dropdown not found — default page size", "err", err)
 		return
 	}
-	_ = trigger.ScrollIntoView()
-	if err := trigger.Click(proto.InputMouseButtonLeft, 1); err != nil {
-		slog.Warn("rows-per-page open failed — default page size", "err", err)
+	if t, _ := label.Text(); strings.TrimSpace(t) == want {
+		slog.Info("rows per page already set", "n", n)
 		return
 	}
-	time.Sleep(600 * time.Millisecond) // PrimeNG overlay render
+	_ = label.ScrollIntoView()
 
-	want := fmt.Sprintf("%d", n)
-	items, _ := page.Elements(`.p-dropdown-item`)
-	for _, it := range items {
-		t, _ := it.Text()
-		if strings.TrimSpace(t) == want {
-			if err := it.Click(proto.InputMouseButtonLeft, 1); err == nil {
-				slog.Info("rows per page set", "n", n)
-				time.Sleep(1500 * time.Millisecond) // table reloads at the new size
+	// After a click, wait for the overlay's .p-dropdown-item options and click n.
+	pickOption := func() bool {
+		for i := 0; i < 12; i++ { // ~3s for the overlay to render
+			time.Sleep(250 * time.Millisecond)
+			items, _ := page.Elements(`.p-dropdown-item`)
+			for _, it := range items {
+				t, _ := it.Text()
+				if strings.TrimSpace(t) == want {
+					_ = it.ScrollIntoView()
+					if it.Click(proto.InputMouseButtonLeft, 1) == nil {
+						return true
+					}
+				}
 			}
+		}
+		return false
+	}
+
+	// Open via the label; if options don't appear, fall back to the chevron trigger.
+	_ = label.Click(proto.InputMouseButtonLeft, 1)
+	if pickOption() {
+		slog.Info("rows per page set", "n", n)
+		time.Sleep(1500 * time.Millisecond) // table reloads at the new size
+		return
+	}
+	if trig, err := page.Element(`.p-dropdown-trigger`); err == nil {
+		_ = trig.Click(proto.InputMouseButtonLeft, 1)
+		if pickOption() {
+			slog.Info("rows per page set (via trigger)", "n", n)
+			time.Sleep(1500 * time.Millisecond)
 			return
 		}
 	}
