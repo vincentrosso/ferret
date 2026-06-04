@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	baseURL    = "https://www.copart.com"
-	loginURL   = "https://www.copart.com/login"
+	baseURL           = "https://www.copart.com"
+	loginURL          = "https://www.copart.com/login"
 	DefaultCookiePath = "data/copart-session.json"
 )
 
@@ -265,6 +265,18 @@ func extractRows(_ context.Context, page *rod.Page, seen map[string]bool) ([]Lot
 		}
 	}
 
+	// Resolve columns by header text — Copart reorders search columns periodically,
+	// so fixed indices drift. Falls back to the known layout if the header is absent.
+	var headers []string
+	if ths, err := page.Elements(`table thead th`); err == nil {
+		for _, th := range ths {
+			if t, err := th.Text(); err == nil {
+				headers = append(headers, t)
+			}
+		}
+	}
+	cols := buildColMap(headers)
+
 	now := time.Now()
 	var lots []Lot
 
@@ -297,7 +309,7 @@ func extractRows(_ context.Context, page *rod.Page, seen map[string]bool) ([]Lot
 			}
 		}
 
-		lot, ok := parseLotRow(href, cellTexts, now)
+		lot, ok := parseLotRow(href, cellTexts, cols, now)
 		if !ok {
 			continue
 		}
@@ -316,78 +328,68 @@ func extractRows(_ context.Context, page *rod.Page, seen map[string]bool) ([]Lot
 	return lots, nil
 }
 
-// nextPage clicks the "Next" pagination button. Returns false when there is none.
-// All element lookups use a short timeout so we don't hang on missing elements.
-// setRowsPerPage opens Copart's PrimeNG "Rows per page" dropdown and selects n
-// (e.g. 100). Best-effort: if the control isn't found we just stay at the default
-// page size — never fatal. Cuts page count (and proxy round-trips) ~5×.
+// setRowsPerPage sets Copart's classic-view results page size to n (e.g. 100).
+//
+// The nationwide hail search loads Copart's CLASSIC results grid — a jQuery
+// DataTables table (#serverSideDataTable) whose page-size control is a native
+// <select name="serverSideDataTable_length"> with options up to 100. (Confirmed
+// by live DOM probe, 2026-06: the default view IS classic; the "New list view"
+// toggle switches to a WORSE 6-column card grid with no size control, so we must
+// NOT toggle.) Setting the select's value and firing a change event triggers a
+// DataTables server-side redraw at the new size: a ~500-lot search becomes ~5
+// pages instead of ~25 — the single biggest speedup through the residential proxy.
+//
+// Best-effort: if the control isn't found we stay at the default size — never fatal.
 func setRowsPerPage(page *rod.Page, n int) {
+	const sel = `select[name="serverSideDataTable_length"]`
 	want := fmt.Sprintf("%d", n)
-	// The "Rows per page" combobox lives in the paginator at the BOTTOM of the
-	// results and isn't in the DOM until we scroll down to it — looking too early
-	// just times out. Scroll to the bottom (polling) until it appears.
-	var label *rod.Element
-	for i := 0; i < 6; i++ {
-		page.Eval(`() => window.scrollTo(0, document.body.scrollHeight)`) //nolint:errcheck
-		time.Sleep(700 * time.Millisecond)
-		if el, err := page.Timeout(2 * time.Second).Element(`[aria-label="Rows per page"]`); err == nil {
-			label = el
-			break
-		}
-	}
-	if label == nil {
-		// No paginator on this view (the nationwide vehicle-search-damage page
-		// renders no rows-per-page control for our cold session) — stay at the
-		// default size. Present on single-sale saleListResult pages.
-		slog.Warn("rows-per-page control not present — default page size")
-		page.Eval(`() => window.scrollTo(0, 0)`) //nolint:errcheck
-		return
-	}
-	if t, _ := label.Text(); strings.TrimSpace(t) == want {
-		page.Eval(`() => window.scrollTo(0, 0)`) //nolint:errcheck
-		slog.Info("rows per page already set", "n", n)
-		return
-	}
-	_ = label.ScrollIntoView()
 
-	// After a click, wait for the overlay's .p-dropdown-item options and click n.
-	pickOption := func() bool {
-		for i := 0; i < 12; i++ { // ~3s for the overlay to render
-			time.Sleep(250 * time.Millisecond)
-			items, _ := page.Elements(`.p-dropdown-item`)
-			for _, it := range items {
-				t, _ := it.Text()
-				if strings.TrimSpace(t) == want {
-					_ = it.ScrollIntoView()
-					if it.Click(proto.InputMouseButtonLeft, 1) == nil {
-						return true
-					}
-				}
-			}
+	// If we somehow landed on the modern card view (no native length select),
+	// toggle back to classic so the control is present. The toggle button reads
+	// "Classic view" only when we're currently on the modern view.
+	if _, err := page.Timeout(2 * time.Second).Element(sel); err != nil {
+		if btn, err := page.Timeout(2*time.Second).ElementR(`button.search_result_toggle_icon`, "Classic view"); err == nil {
+			slog.Info("modern view detected — toggling to classic for page-size control")
+			_ = btn.Click(proto.InputMouseButtonLeft, 1)
+			time.Sleep(3 * time.Second)
 		}
-		return false
 	}
 
-	// Open via the label; if options don't appear, fall back to the chevron trigger.
-	_ = label.Click(proto.InputMouseButtonLeft, 1)
-	if pickOption() {
-		slog.Info("rows per page set", "n", n)
-		time.Sleep(1500 * time.Millisecond) // table reloads at the new size
+	lenSel, err := page.Timeout(5 * time.Second).Element(sel)
+	if err != nil {
+		slog.Warn("classic rows-per-page <select> not present — default page size", "err", err)
 		return
 	}
-	if trig, err := page.Element(`.p-dropdown-trigger`); err == nil {
-		_ = trig.Click(proto.InputMouseButtonLeft, 1)
-		if pickOption() {
-			slog.Info("rows per page set (via trigger)", "n", n)
-			time.Sleep(1500 * time.Millisecond)
-			return
-		}
+
+	// Native <select>: set value + dispatch a bubbling change event so DataTables
+	// picks it up and redraws server-side at the new length.
+	if _, err := lenSel.Eval(`(want) => {
+		this.value = want;
+		this.dispatchEvent(new Event('change', { bubbles: true }));
+		return this.value;
+	}`, want); err != nil {
+		slog.Warn("set rows-per-page failed", "err", err)
+		return
 	}
-	slog.Warn("rows-per-page option not found — default page size", "want", want)
+	slog.Info("rows per page set (classic select)", "n", n)
+	time.Sleep(2500 * time.Millisecond) // DataTables server-side redraw at new size
 }
 
 func nextPage(page *rod.Page) bool {
 	const lookupTimeout = 2 * time.Second
+
+	// Classic DataTables next button: <a id="serverSideDataTable_next"
+	// class="paginate_button next [disabled]">. DataTables flags the last page by
+	// adding the "disabled" CLASS (not a disabled attribute), so check the class.
+	if el, err := page.Timeout(lookupTimeout).Element(`#serverSideDataTable_next`); err == nil {
+		if cls, _ := el.Attribute("class"); cls != nil && strings.Contains(*cls, "disabled") {
+			return false
+		}
+		if el.Click(proto.InputMouseButtonLeft, 1) == nil {
+			return true
+		}
+	}
+
 	selectors := []string{
 		`[aria-label="Next page"]`,
 		`[aria-label="Next"]`,

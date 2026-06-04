@@ -114,6 +114,7 @@ type Lot struct {
 	YardName      string
 	SaleDate      string
 	CurrentBid    float64
+	EstRetail     float64 // Copart "Est. Retail Value" (ACV) from the search row
 	ThumbnailURL  string
 	IsHail        bool
 	IsSalvage     bool
@@ -144,26 +145,58 @@ var (
 	reSaleTime = regexp.MustCompile(`(?i)\d{1,2}:\d{2}\s*(AM|PM)`) // auction time cell, e.g. "10:00 AM PDT"
 )
 
-// parseLotRow extracts a Lot from the Copart 2025 search result row (15 columns).
+// colMap resolves a logical field to its column index in the classic results
+// table. Copart periodically reorders the search columns (and has — a prior
+// fixed-index map silently read Title out of the Damage column), so we resolve
+// by header text rather than trusting fixed positions.
+type colMap map[string]int
+
+// buildColMap derives column indices from the results-table header row.
+// Headers seen on the classic (#serverSideDataTable) view, 2026-06:
 //
-// Actual column layout observed via DOM inspection:
-//
-//	[0]  checkbox (empty)
-//	[1]  thumbnail image
-//	[2]  lot number + "Watch" link
-//	[3]  year
-//	[4]  make
-//	[5]  model
-//	[6]  ? (often "0")
-//	[7]  damage code short (e.g. "HL")
-//	[8]  sale status / lane (e.g. "Future")
-//	[9]  odometer (e.g. "81946 A")
-//	[10] auction time (e.g. "10:00 AM PDT")
-//	[11] title type + state (e.g. "CT - KS")
-//	[12] damage description (e.g. "HAIL")
-//	[13] current bid (e.g. "Current bid : $0.00\nBid now")
-//	[14] (empty)
-func parseLotRow(lotURL string, cells []string, now time.Time) (Lot, bool) {
+//	["", Images, Lot #, Year, Make, Model, Item#, Location / Lane,
+//	 Sale Date, Odometer, Title Code, Damage, Est. Retail Value, Current Bid, ""]
+func buildColMap(headers []string) colMap {
+	m := colMap{}
+	for i, h := range headers {
+		h = strings.ToLower(strings.TrimSpace(h))
+		switch {
+		case strings.Contains(h, "year"):
+			m["year"] = i
+		case strings.Contains(h, "make"):
+			m["make"] = i
+		case strings.Contains(h, "model"):
+			m["model"] = i
+		case strings.Contains(h, "odom"):
+			m["odometer"] = i
+		case strings.Contains(h, "title"):
+			m["title"] = i
+		case strings.Contains(h, "retail"):
+			m["retail"] = i // checked before "damage"/"bid" — "Est. Retail Value"
+		case strings.Contains(h, "damage"):
+			m["damage"] = i
+		case strings.Contains(h, "bid"):
+			m["bid"] = i
+		case strings.Contains(h, "location"), strings.Contains(h, "lane"):
+			m["location"] = i
+		case strings.Contains(h, "sale") && strings.Contains(h, "date"):
+			m["saledate"] = i
+		}
+	}
+	return m
+}
+
+// legacyCols is the fallback index map matching the current classic layout,
+// used only when the header row can't be read (cols comes back empty).
+var legacyCols = colMap{
+	"year": 3, "make": 4, "model": 5, "location": 7, "saledate": 8,
+	"odometer": 9, "title": 10, "damage": 11, "retail": 12, "bid": 13,
+}
+
+// parseLotRow extracts a Lot from a Copart classic-view search result row,
+// resolving cells through cols (header-derived). Pass an empty cols to fall back
+// to the known fixed layout.
+func parseLotRow(lotURL string, cells []string, cols colMap, now time.Time) (Lot, bool) {
 	lotM := reLotNum.FindStringSubmatch(lotURL)
 	if len(lotM) < 2 {
 		return Lot{}, false
@@ -178,35 +211,33 @@ func parseLotRow(lotURL string, cells []string, now time.Time) (Lot, bool) {
 		ScrapedAt: now,
 	}
 
-	cell := func(i int) string {
-		if i < len(cells) {
-			return strings.TrimSpace(cells[i])
+	if len(cols) == 0 {
+		cols = legacyCols
+	}
+	// cell returns the trimmed text of the column mapped to key, or "" if absent.
+	cell := func(key string) string {
+		i, ok := cols[key]
+		if !ok || i >= len(cells) {
+			return ""
 		}
-		return ""
+		return strings.TrimSpace(cells[i])
 	}
 
-	// Year (col 3)
-	if y, err := strconv.Atoi(cell(3)); err == nil && y > 1990 {
+	if y, err := strconv.Atoi(cell("year")); err == nil && y > 1990 {
 		lot.Year = y
 	}
+	lot.Make = strings.ToUpper(strings.TrimSpace(cell("make")))
+	lot.Model = strings.TrimSpace(cell("model"))
 
-	// Make (col 4)
-	lot.Make = strings.ToUpper(strings.TrimSpace(cell(4)))
-
-	// Model (col 5)
-	lot.Model = strings.TrimSpace(cell(5))
-
-	// Title (composed)
 	if lot.Year > 0 && lot.Make != "" {
 		lot.Title = fmt.Sprintf("%d %s %s", lot.Year, lot.Make, lot.Model)
 	}
-
 	if lot.Make == "" {
 		return Lot{}, false
 	}
 
-	// Odometer (col 9): "81946 A" or "81,946 A" → 81946
-	if raw := cell(9); raw != "" {
+	// Odometer: "81946 A" or "81,946 A" → 81946
+	if raw := cell("odometer"); raw != "" {
 		if m := reOdoText.FindStringSubmatch(strings.TrimSpace(strings.Split(raw, "\n")[0])); len(m) >= 2 {
 			if n, err := strconv.Atoi(strings.ReplaceAll(m[1], ",", "")); err == nil {
 				lot.Odometer = n
@@ -214,33 +245,46 @@ func parseLotRow(lotURL string, cells []string, now time.Time) (Lot, bool) {
 		}
 	}
 
-	// Title type + state (col 11): "CT - KS" → TitleType="CT", YardName=state abbr
-	if c11 := cell(11); c11 != "" {
-		parts := strings.SplitN(c11, "-", 2)
-		lot.TitleType = strings.TrimSpace(parts[0])
-		if len(parts) > 1 {
-			lot.YardName = strings.TrimSpace(parts[1])
+	// Title Code (e.g. "CT - TX") → TitleType="CT". The trailing token is the
+	// title's issuing state, not the yard — the yard comes from Location / Lane.
+	if t := cell("title"); t != "" {
+		lot.TitleType = strings.TrimSpace(strings.SplitN(t, "-", 2)[0])
+	}
+
+	// Location / Lane (e.g. "TX - FT. WORTH -") → yard, trailing separators trimmed.
+	if loc := cell("location"); loc != "" {
+		lot.YardName = strings.TrimRight(strings.TrimSpace(strings.Split(loc, "\n")[0]), " -")
+	}
+
+	// Sale date: prefer the Sale Date column when it carries a real date/time
+	// ("Future" is a placeholder), else scan any cell that looks like an auction
+	// time ("10:00 AM PDT"). The detail scrape overrides this authoritatively.
+	if sd := cell("saledate"); sd != "" && !strings.EqualFold(sd, "future") {
+		lot.SaleDate = strings.TrimSpace(strings.Split(sd, "\n")[0])
+	} else {
+		for _, c := range cells {
+			c = strings.TrimSpace(strings.Split(c, "\n")[0])
+			if reSaleTime.MatchString(c) {
+				lot.SaleDate = c
+				break
+			}
 		}
 	}
 
-	// Auction time — Copart's column order shifts between search variants, so
-	// scan for whichever cell looks like a time ("10:00 AM PDT") rather than a
-	// fixed index. Soonest-first sort key on the lane; the authoritative full
-	// sale date comes from the detail scrape during enrich and overrides this.
-	for i := 0; i < len(cells); i++ {
-		c := strings.TrimSpace(strings.Split(cells[i], "\n")[0])
-		if reSaleTime.MatchString(c) {
-			lot.SaleDate = c
-			break
+	lot.DamagePrimary = cell("damage")
+
+	// Est. Retail Value (ACV), e.g. "$27,822"
+	if r := cell("retail"); r != "" {
+		if m := reMoney.FindString(r); m != "" {
+			if f, err := strconv.ParseFloat(strings.ReplaceAll(m, ",", ""), 64); err == nil {
+				lot.EstRetail = f
+			}
 		}
 	}
 
-	// Damage description (col 12): "HAIL"
-	lot.DamagePrimary = strings.TrimSpace(cell(12))
-
-	// Current bid (col 13): "Current bid : $1,234.00\nBid now"
-	if c13 := cell(13); c13 != "" {
-		if m := reMoney.FindString(c13); m != "" {
+	// Current bid: "Current bid : $1,234.00\nBid now"
+	if b := cell("bid"); b != "" {
+		if m := reMoney.FindString(b); m != "" {
 			if f, err := strconv.ParseFloat(strings.ReplaceAll(m, ",", ""), 64); err == nil {
 				lot.CurrentBid = f
 			}
