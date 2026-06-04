@@ -208,6 +208,12 @@ func (s *Scraper) RunSearchURL(ctx context.Context, rawURL string, maxPages int)
 	}
 	time.Sleep(1500 * time.Millisecond) // let all rows render
 
+	// Bump the page size to 100 up front: a ~500-lot search becomes ~5 pages
+	// instead of ~25, and the per-page nav cost through the residential proxy
+	// dominates, so fewer pages is the single biggest speedup (and what was
+	// blowing the scrape past its timeout).
+	setRowsPerPage(page, 100)
+
 	var lots []Lot
 	seen := map[string]bool{}
 
@@ -312,6 +318,37 @@ func extractRows(_ context.Context, page *rod.Page, seen map[string]bool) ([]Lot
 
 // nextPage clicks the "Next" pagination button. Returns false when there is none.
 // All element lookups use a short timeout so we don't hang on missing elements.
+// setRowsPerPage opens Copart's PrimeNG "Rows per page" dropdown and selects n
+// (e.g. 100). Best-effort: if the control isn't found we just stay at the default
+// page size — never fatal. Cuts page count (and proxy round-trips) ~5×.
+func setRowsPerPage(page *rod.Page, n int) {
+	trigger, err := page.Timeout(8 * time.Second).Element(`[aria-label="Rows per page"]`)
+	if err != nil {
+		slog.Warn("rows-per-page dropdown not found — default page size", "err", err)
+		return
+	}
+	_ = trigger.ScrollIntoView()
+	if err := trigger.Click(proto.InputMouseButtonLeft, 1); err != nil {
+		slog.Warn("rows-per-page open failed — default page size", "err", err)
+		return
+	}
+	time.Sleep(600 * time.Millisecond) // PrimeNG overlay render
+
+	want := fmt.Sprintf("%d", n)
+	items, _ := page.Elements(`.p-dropdown-item`)
+	for _, it := range items {
+		t, _ := it.Text()
+		if strings.TrimSpace(t) == want {
+			if err := it.Click(proto.InputMouseButtonLeft, 1); err == nil {
+				slog.Info("rows per page set", "n", n)
+				time.Sleep(1500 * time.Millisecond) // table reloads at the new size
+			}
+			return
+		}
+	}
+	slog.Warn("rows-per-page option not found — default page size", "want", want)
+}
+
 func nextPage(page *rod.Page) bool {
 	const lookupTimeout = 2 * time.Second
 	selectors := []string{
