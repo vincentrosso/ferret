@@ -323,15 +323,25 @@ func extractRows(_ context.Context, page *rod.Page, seen map[string]bool) ([]Lot
 // page size — never fatal. Cuts page count (and proxy round-trips) ~5×.
 func setRowsPerPage(page *rod.Page, n int) {
 	want := fmt.Sprintf("%d", n)
-	// The combobox label (a <span role=combobox aria-label="Rows per page">) shows
-	// the current size and is the click target; the options only render into a
-	// <p-overlay> once it opens, so poll for them rather than fixed-sleep.
-	label, err := page.Timeout(8 * time.Second).Element(`[aria-label="Rows per page"]`)
-	if err != nil {
-		slog.Warn("rows-per-page dropdown not found — default page size", "err", err)
+	// The "Rows per page" combobox lives in the paginator at the BOTTOM of the
+	// results and isn't in the DOM until we scroll down to it — looking too early
+	// just times out. Scroll to the bottom (polling) until it appears.
+	var label *rod.Element
+	for i := 0; i < 6; i++ {
+		page.Eval(`() => window.scrollTo(0, document.body.scrollHeight)`) //nolint:errcheck
+		time.Sleep(700 * time.Millisecond)
+		if el, err := page.Timeout(2 * time.Second).Element(`[aria-label="Rows per page"]`); err == nil {
+			label = el
+			break
+		}
+	}
+	if label == nil {
+		slog.Warn("rows-per-page dropdown not found — default page size")
+		page.Eval(`() => window.scrollTo(0, 0)`) //nolint:errcheck
 		return
 	}
 	if t, _ := label.Text(); strings.TrimSpace(t) == want {
+		page.Eval(`() => window.scrollTo(0, 0)`) //nolint:errcheck
 		slog.Info("rows per page already set", "n", n)
 		return
 	}
