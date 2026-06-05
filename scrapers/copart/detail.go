@@ -48,6 +48,7 @@ type DetailResult struct {
 	FinalBid           float64      `json:"final_bid,omitempty"`
 	SaleStatus         string       `json:"sale_status,omitempty"`
 	SaleDate           string       `json:"sale_date,omitempty"`
+	YardName           string       `json:"yard_name,omitempty"`
 	IsBIN              bool         `json:"is_bin,omitempty"`
 	BuyNowAmount       float64      `json:"buy_now_amount,omitempty"`
 	ScrapedAt          time.Time    `json:"scraped_at"`
@@ -74,6 +75,12 @@ var (
 	reSaleDate     = regexp.MustCompile(`(\d{2}/\d{2}/\d{4})`)
 	// Copart's labeled sale date, e.g. "Sale date: Tue. Jun 02, 2026 01:00 AM UTC"
 	reSaleDateLine = regexp.MustCompile(`(?i)sale date[:\s]+([A-Za-z]{3}\.?\s+[A-Za-z]{3}\.?\s+\d{1,2},\s+\d{4}(?:\s+\d{1,2}:\d{2}\s*(?:AM|PM)?\s*[A-Z]{0,4})?)`)
+	// Copart labels the yard "Sale name:" / "Location:" with the value on the
+	// NEXT line, e.g. "Location:\nTX - FT. WORTH". The "ST - CITY" capture (state
+	// code, dash, city) both mirrors the search-side YardName the live-watch
+	// runner resolves against AND guards against grabbing the "Locations" nav
+	// menu. [:\s]+ spans the colon+newline between label and value.
+	reYardLine = regexp.MustCompile(`(?i)(?:sale name|location)[:\s]+([A-Z]{2}\s*-\s*[A-Za-z0-9 .,'/&-]+?)(?:\n|$)`)
 	reBIN          = regexp.MustCompile(`(?i)buy\s*(?:it\s*)?now`)
 	reBINAmount    = regexp.MustCompile(`(?i)buy\s*(?:it\s*)?now[:\s$]*([\d,]+)`)
 	reCurrentBid   = regexp.MustCompile(`(?i)Current\s*Bid[:\s$]*([\d,]+)`)
@@ -329,6 +336,14 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 				res.SaleDate = d
 			}
 		}
+	}
+
+	// Sale Location → yard. Needed by the live hammer-watch: the runner resolves
+	// the Copart sale id from yard_name + sale_date, and nationwide search rows
+	// carry no yard, so the detail scrape is the only place to capture it. Copart
+	// puts the value on the line after the "Location:"/"Sale name:" label.
+	if m := reYardLine.FindStringSubmatch(bodyText); len(m) >= 2 {
+		res.YardName = strings.TrimRight(strings.TrimSpace(m[1]), " -")
 	}
 
 	// Fuel / loss fallback from DOM
