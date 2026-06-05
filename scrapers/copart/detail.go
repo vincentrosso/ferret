@@ -48,6 +48,7 @@ type DetailResult struct {
 	FinalBid           float64      `json:"final_bid,omitempty"`
 	SaleStatus         string       `json:"sale_status,omitempty"`
 	SaleDate           string       `json:"sale_date,omitempty"`
+	SaleAt             string       `json:"sale_at,omitempty"` // RFC3339 UTC — full sale moment (date+time+tz)
 	YardName           string       `json:"yard_name,omitempty"`
 	IsBIN              bool         `json:"is_bin,omitempty"`
 	BuyNowAmount       float64      `json:"buy_now_amount,omitempty"`
@@ -329,12 +330,17 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 		}
 	}
 	// Fallback: the labeled "Sale date: …" line in the body text (targeted, so it
-	// won't grab unrelated dates from listing history or repair estimates).
-	if res.SaleDate == "" && res.SaleStatus != "future" {
+	// won't grab unrelated dates from listing history or repair estimates). This
+	// line also carries the time + tz (the field value above is often date-only),
+	// so use it to pin the precise sale_at the live-watch filter needs.
+	if res.SaleStatus != "future" {
 		if m := reSaleDateLine.FindStringSubmatch(bodyText); len(m) >= 2 {
-			if d := parseCopartSaleDate(m[1]); d != "" {
-				res.SaleDate = d
+			if res.SaleDate == "" {
+				if d := parseCopartSaleDate(m[1]); d != "" {
+					res.SaleDate = d
+				}
 			}
+			res.SaleAt = parseCopartSaleAt(m[1])
 		}
 	}
 
@@ -663,6 +669,52 @@ func parseCopartSaleDate(s string) string {
 	} {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t.Format("01/02/2006")
+		}
+	}
+	return ""
+}
+
+// US auction-timezone abbreviations → UTC offset (seconds). Go's time.Parse
+// reads "PDT"/"EDT" as a zero-offset named zone, so we map them by hand.
+var tzOffsets = map[string]int{
+	"UTC": 0, "GMT": 0,
+	"EST": -5 * 3600, "EDT": -4 * 3600,
+	"CST": -6 * 3600, "CDT": -5 * 3600,
+	"MST": -7 * 3600, "MDT": -6 * 3600,
+	"PST": -8 * 3600, "PDT": -7 * 3600,
+	"AKST": -9 * 3600, "AKDT": -8 * 3600,
+	"HST": -10 * 3600,
+}
+
+// parseCopartSaleAt parses Copart's full sale moment, e.g.
+// "Fri. Jun 05, 2026 10:00 AM PDT", to an RFC3339 UTC timestamp. Returns "" if
+// the string has no parseable time (date-only) so callers can fall back to date.
+func parseCopartSaleAt(s string) string {
+	s = strings.TrimSpace(strings.Split(s, "\n")[0])
+	s = strings.Join(strings.Fields(s), " ")
+	fields := strings.Fields(s)
+	if len(fields) < 2 {
+		return ""
+	}
+	off, hasTz := 0, false
+	if o, ok := tzOffsets[strings.ToUpper(fields[len(fields)-1])]; ok {
+		off, hasTz = o, true
+		s = strings.TrimSpace(s[:strings.LastIndex(s, fields[len(fields)-1])])
+	}
+	if !hasTz {
+		return "" // no tz → can't pin a real UTC instant; let date-only stand
+	}
+	for _, layout := range []string{
+		"Mon. Jan 02, 2006 03:04 PM",
+		"Mon. Jan 2, 2006 03:04 PM",
+		"Mon Jan 02, 2006 03:04 PM",
+		"Mon. Jan. 02, 2006 03:04 PM",
+		"Jan 02, 2006 03:04 PM",
+		"Jan 2, 2006 03:04 PM",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			// t is parsed as UTC wall-clock; shift by -offset to get the true UTC instant.
+			return t.Add(-time.Duration(off) * time.Second).UTC().Format(time.RFC3339)
 		}
 	}
 	return ""
