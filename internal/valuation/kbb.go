@@ -124,7 +124,8 @@ func fetchKBBBody(pageURL, proxyURL string, step time.Duration) (body string, no
 		Headless: true,
 		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
 			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-		ProxyURL: proxyURL,
+		ProxyURL:       proxyURL,
+		BlockResources: true, // value table is text/JSON — skip images/fonts/media
 	})
 	if err != nil {
 		return "", false, fmt.Errorf("launch browser: %w", err)

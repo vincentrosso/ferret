@@ -60,7 +60,8 @@ func ScrapeAuctionHistory(makeName, model string, year int, proxyURL string) (*A
 		Headless: true,
 		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
 			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-		ProxyURL: browser.StickyProxy(proxyURL, fmt.Sprintf("ah%x", time.Now().UnixNano())),
+		ProxyURL:       browser.StickyProxy(proxyURL, fmt.Sprintf("ah%x", time.Now().UnixNano())),
+		BlockResources: true, // sold-price table is text — skip images/fonts/media
 	})
 	if err != nil {
 		return nil, fmt.Errorf("launch browser: %w", err)

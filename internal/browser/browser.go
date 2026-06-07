@@ -41,6 +41,11 @@ type Options struct {
 	// Required when running on VPS IPs blocked by Imperva/Incapsula (IAAI, sometimes Copart).
 	// TODO: wire up via COPART_PROXY_URL / IAAI_PROXY_URL env vars in cmd/ferret.
 	ProxyURL string
+	// BlockResources drops image/font/media requests at the network layer — a big
+	// bandwidth cut for value scrapes (KBB, saleshistory) whose payload is text/JSON,
+	// not imagery. DO NOT set for the detail scraper: it downloads lot photos for the
+	// vision pass. Off by default.
+	BlockResources bool
 }
 
 type Browser struct {
@@ -213,6 +218,25 @@ func (b *Browser) NewPage(url string) (*rod.Page, error) {
 		go page.EachEvent(func(e *proto.NetworkLoadingFinished) {
 			totalBytes.Add(int64(e.EncodedDataLength))
 		})()
+	}
+
+	// Resource blocking: pause only image/font/media requests (the Fetch patterns
+	// filter by type, so nothing else is intercepted) and fail them outright. Text/
+	// JSON/XHR — where the value tables live — flow untouched. Blocked requests never
+	// hit the proxy, so this is a direct bandwidth (and overage) cut.
+	if b.opts.BlockResources {
+		if err := (proto.FetchEnable{Patterns: []*proto.FetchRequestPattern{
+			{ResourceType: proto.NetworkResourceTypeImage, RequestStage: proto.FetchRequestStageRequest},
+			{ResourceType: proto.NetworkResourceTypeFont, RequestStage: proto.FetchRequestStageRequest},
+			{ResourceType: proto.NetworkResourceTypeMedia, RequestStage: proto.FetchRequestStageRequest},
+		}}).Call(page); err == nil {
+			go page.EachEvent(func(e *proto.FetchRequestPaused) {
+				_ = proto.FetchFailRequest{
+					RequestID:   e.RequestID,
+					ErrorReason: proto.NetworkErrorReasonBlockedByClient,
+				}.Call(page)
+			})()
+		}
 	}
 
 	return page, nil
