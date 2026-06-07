@@ -10,12 +10,28 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/proto"
 )
+
+// totalBytes is a process-global egress meter: the sum of on-wire bytes received
+// across every page in this process. Each ferret invocation is a single short-lived
+// scrape, so a process-global total cleanly captures all traffic — including retries
+// and multiple browser launches within one command — with no per-call plumbing.
+// Proxies bill on-wire transfer, so this is the figure that drives the bandwidth
+// gauge / overage projection (calibrated against DataImpulse's own stats API).
+var totalBytes atomic.Int64
+
+// TotalBytes returns on-wire bytes received so far this process. Commands read it
+// after the scrape and emit it so the Python caller can attribute GB per provider.
+func TotalBytes() int64 { return totalBytes.Load() }
+
+// ResetBytes zeroes the meter (rarely needed; the process is per-scrape anyway).
+func ResetBytes() { totalBytes.Store(0) }
 
 type Options struct {
 	Headless  bool
@@ -179,15 +195,25 @@ func (b *Browser) NewPage(url string) (*rod.Page, error) {
 
 	// Override UA at the network layer
 	if err := page.SetUserAgent(&proto.NetworkSetUserAgentOverride{
-		UserAgent:         b.opts.UserAgent,
-		AcceptLanguage:    "en-US,en;q=0.9",
-		Platform:          "MacIntel",
+		UserAgent:      b.opts.UserAgent,
+		AcceptLanguage: "en-US,en;q=0.9",
+		Platform:       "MacIntel",
 	}); err != nil {
 		return nil, err
 	}
 
 	// Stealth JS — runs before page scripts so the patches are in place
 	page.MustEval(stealthJS)
+
+	// Egress metering: enable the Network domain and tally on-wire bytes per
+	// finished request into the process-global meter. EncodedDataLength is the
+	// total bytes received for the request (headers + compressed body) — the same
+	// thing the proxy bills. Runs for the page's lifetime in the background.
+	if err := (proto.NetworkEnable{}).Call(page); err == nil {
+		go page.EachEvent(func(e *proto.NetworkLoadingFinished) {
+			totalBytes.Add(int64(e.EncodedDataLength))
+		})()
+	}
 
 	return page, nil
 }

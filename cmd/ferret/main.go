@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -766,6 +767,36 @@ func fatal(msg string, err error) {
 	os.Exit(1)
 }
 
+// emitValue prints a value-command result as JSON, augmented with the egress bytes
+// this process used and the upstream proxy host — so the Python caller can attribute
+// bandwidth to the right provider. Works for both the success struct and the
+// {"error": …} map (a failed scrape still burned bytes). The meter keys are
+// underscore-prefixed so they never collide with a result's own fields.
+func emitValue(result any, proxyURL string) {
+	m := map[string]any{}
+	if b, err := json.Marshal(result); err == nil {
+		_ = json.Unmarshal(b, &m)
+	}
+	m["_bytes_used"] = browser.TotalBytes()
+	if h := proxyHost(proxyURL); h != "" {
+		m["_proxy_host"] = h
+	}
+	out, _ := json.MarshalIndent(m, "", "  ")
+	fmt.Println(string(out))
+}
+
+// proxyHost extracts the upstream provider host (no port, no creds) from a proxy
+// URL: "http://user:pass@gw.dataimpulse.com:10000" → "gw.dataimpulse.com".
+func proxyHost(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	return ""
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, `ferret — scrape engine
 
@@ -818,12 +849,10 @@ func runValueAuctionHistory(args []string) {
 
 	result, err := valuation.ScrapeAuctionHistory(*makeName, *model, *year, *proxy)
 	if err != nil {
-		b, _ := json.Marshal(map[string]string{"error": err.Error()})
-		fmt.Println(string(b))
+		emitValue(map[string]string{"error": err.Error()}, *proxy)
 		os.Exit(1)
 	}
-	b, _ := json.MarshalIndent(result, "", "  ")
-	fmt.Println(string(b))
+	emitValue(result, *proxy)
 }
 
 func runValueKBB(args []string) {
@@ -846,12 +875,10 @@ func runValueKBB(args []string) {
 
 	result, err := valuation.ScrapeKBB(*makeName, *model, *year, *trim, *proxy)
 	if err != nil {
-		b, _ := json.Marshal(map[string]string{"error": err.Error()})
-		fmt.Println(string(b))
+		emitValue(map[string]string{"error": err.Error()}, *proxy)
 		os.Exit(1)
 	}
-	b, _ := json.MarshalIndent(result, "", "  ")
-	fmt.Println(string(b))
+	emitValue(result, *proxy)
 }
 
 // firstImageFromZip returns the raw bytes of the first JPEG in a zip archive.
