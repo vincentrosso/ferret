@@ -105,7 +105,7 @@ outer:
 	res.Trims = trims
 
 	// Match our trim; else fall back to the median trim by private-party value.
-	match := matchKBBTrim(trims, trim)
+	match := matchKBBTrim(trims, model, trim)
 	res.MatchedTrim = match.Trim
 	res.TradeIn = match.TradeIn
 	res.PrivateParty = match.PrivateParty
@@ -160,19 +160,29 @@ func fetchKBBBody(pageURL, proxyURL string, step time.Duration) (body string, no
 func parseKBBTrims(body string) []KBBTrim {
 	// Normalize whitespace so tab/newline-separated cells become single spaces.
 	norm := strings.Join(strings.Fields(strings.ReplaceAll(strings.ReplaceAll(body, "\t", " "), "\n", " ")), " ")
-	// Limit to the value-table region to avoid stray triples elsewhere.
-	if i := strings.Index(norm, "Trade-In Value"); i >= 0 {
-		end := i + 2500
-		if end > len(norm) {
-			end = len(norm)
-		}
-		norm = norm[i:end]
-	}
+	// NOTE: no region windowing. An earlier "slice 2500 chars after the first
+	// 'Trade-In Value'" anchor silently CLIPPED trims that render before/after the
+	// label — e.g. it kept the pricey RC F but dropped the cheaper RC 350, doubling
+	// the valuation. The row regex (trim ending in a body-style keyword + exactly
+	// three $ amounts) plus the dedup/"value" filter below are specific enough to
+	// scan the whole page text without pulling stray triples.
 	var out []KBBTrim
 	seen := map[string]bool{}
 	for _, m := range reKBBRow.FindAllStringSubmatch(norm, -1) {
 		trim := strings.TrimSpace(m[1])
-		if seen[trim] || strings.Contains(strings.ToLower(trim), "value") {
+		// The lazy trim capture can swallow a preceding column LABEL, e.g.
+		// "… Private Party Value RC 350 Coupe 2D". Cut to the text after the last
+		// label boundary so the real trim survives instead of being filtered out
+		// (which is what dropped the cheaper RC 350 and left only the pricey RC F).
+		cut := 0
+		for _, lbl := range []string{"Trade-In Value", "Private Party Value",
+			"Fair Purchase Price", "(national avg.)", "Value", "Price"} {
+			if k := strings.LastIndex(trim, lbl); k >= 0 && k+len(lbl) > cut {
+				cut = k + len(lbl)
+			}
+		}
+		trim = strings.TrimSpace(trim[cut:])
+		if trim == "" || seen[trim] || strings.Contains(strings.ToLower(trim), "value") {
 			continue
 		}
 		seen[trim] = true
@@ -186,10 +196,16 @@ func parseKBBTrims(body string) []KBBTrim {
 	return out
 }
 
-// matchKBBTrim finds the trim row best matching our trim string; falls back to
-// the median private-party trim when there's no match.
-func matchKBBTrim(trims []KBBTrim, want string) KBBTrim {
-	want = strings.ToUpper(strings.TrimSpace(want))
+// matchKBBTrim picks the KBB trim row that best fits our vehicle. Priority:
+//  1. an explicit trim that prefix-matches a row (e.g. "XLE" → "XLE Sport Utility")
+//  2. the row sharing the most DISCRIMINATOR tokens with the model+trim — this is
+//     what pins "RC 350" to the RC 350 row instead of the pricier RC F, because
+//     the "350" lives in Copart's MODEL string, not the trim field, and would
+//     otherwise be dropped.
+//  3. fallback: the LOWER-middle trim by price — a stable estimate that, unlike the
+//     old upper-middle, never rounds a 2-trim lineup UP to the dearer model.
+func matchKBBTrim(trims []KBBTrim, model, trim string) KBBTrim {
+	want := strings.ToUpper(strings.TrimSpace(trim))
 	if want != "" {
 		// Prefer a row whose first word(s) equal our trim (e.g. "XLE" →
 		// "XLE Sport Utility 4D", not "XLE Premium …").
@@ -208,14 +224,75 @@ func matchKBBTrim(trims []KBBTrim, want string) KBBTrim {
 			return *prefixMatch
 		}
 	}
-	// Median by private-party value — a stable middle-of-lineup estimate.
+
+	// Discriminator-token scoring: count how many meaningful tokens from the
+	// model+trim ("350", "F", "XLE", "2.5I", …) appear as words in each trim label.
+	// Ties break to the CHEAPER trim (conservative — don't over-value on a guess).
+	tokens := discriminatorTokens(model + " " + trim)
+	if len(tokens) > 0 {
+		bestScore := 0
+		var best *KBBTrim
+		for i := range trims {
+			label := tokenSet(trims[i].Trim)
+			score := 0
+			for t := range tokens {
+				if label[t] {
+					score++
+				}
+			}
+			if score > bestScore ||
+				(score == bestScore && score > 0 && best != nil && trims[i].PrivateParty < best.PrivateParty) {
+				bestScore, best = score, &trims[i]
+			}
+		}
+		if best != nil && bestScore > 0 {
+			return *best
+		}
+	}
+
+	// Fallback: lower-middle trim by private-party value.
 	sorted := append([]KBBTrim(nil), trims...)
 	for i := 1; i < len(sorted); i++ {
 		for j := i; j > 0 && sorted[j].PrivateParty < sorted[j-1].PrivateParty; j-- {
 			sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
 		}
 	}
-	return sorted[len(sorted)/2]
+	return sorted[(len(sorted)-1)/2]
+}
+
+// kbbNoiseWords are body-style / drivetrain tokens that don't distinguish a trim,
+// so they're dropped before discriminator scoring. ("SPORT" is deliberately kept —
+// "F SPORT" is a real trim.)
+var kbbNoiseWords = map[string]bool{
+	"COUPE": true, "SEDAN": true, "HATCHBACK": true, "CONVERTIBLE": true,
+	"WAGON": true, "MINIVAN": true, "PICKUP": true, "VAN": true, "TRUCK": true,
+	"UTILITY": true, "CAB": true, "CREW": true, "EXTENDED": true, "REGULAR": true,
+	"2D": true, "3D": true, "4D": true, "AWD": true, "FWD": true, "RWD": true,
+	"4WD": true, "4X4": true, "BASE": true,
+}
+
+// discriminatorTokens pulls the trim-distinguishing tokens out of a model/trim
+// string (uppercased, body-style + drivetrain noise dropped).
+func discriminatorTokens(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToUpper(s)) {
+		w = strings.Trim(w, ".,/")
+		if w != "" && !kbbNoiseWords[w] {
+			out[w] = true
+		}
+	}
+	return out
+}
+
+// tokenSet returns the uppercased word set of a trim label.
+func tokenSet(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToUpper(s)) {
+		if w = strings.Trim(w, ".,/"); w != "" {
+			out[w] = true
+		}
+	}
+	return out
 }
 
 // modelSlugCandidates yields base-model-first slug guesses from a model string.
