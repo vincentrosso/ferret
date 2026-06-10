@@ -244,14 +244,48 @@ func (s *Scraper) RunSearchURL(ctx context.Context, rawURL string, maxPages int)
 			break
 		}
 
+		prevFirst := firstLotHref(page)
 		if !nextPage(page) {
 			break
 		}
-		// Wait for new rows to replace the old ones
-		time.Sleep(2 * time.Second)
+		// Wait for the server-side redraw to actually swap the rows in. Through
+		// a slow residential proxy the repaint can take 30s+; a fixed short wait
+		// re-reads the old page, which looks like "no new rows" and ends the
+		// scrape after page 1. On the true last page the (always-enabled) next
+		// click changes nothing — the timeout is what detects that.
+		if !waitRowsChanged(page, prevFirst, 40*time.Second) {
+			slog.Info("rows unchanged after next click — last page", "page", pageNum)
+			break
+		}
 	}
 
 	return lots, nil
+}
+
+// firstLotHref returns the first lot link href in the results table ("" if none).
+func firstLotHref(page *rod.Page) string {
+	el, err := page.Timeout(2 * time.Second).Element(`table tbody tr a[href*="/lot/"]`)
+	if err != nil {
+		return ""
+	}
+	href, err := el.Attribute("href")
+	if err != nil || href == nil {
+		return ""
+	}
+	return *href
+}
+
+// waitRowsChanged polls until the table's first lot href differs from prev
+// (the server-side redraw landed) or the timeout elapses.
+func waitRowsChanged(page *rod.Page, prev string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if h := firstLotHref(page); h != "" && h != prev {
+			return true
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return false
 }
 
 // extractRows pulls all lot rows from the current page state.
