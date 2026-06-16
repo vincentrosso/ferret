@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -614,7 +615,15 @@ func downloadURLsToZip(urls []string, dir, lotNumber string) (string, error) {
 	zw := zip.NewWriter(f)
 	defer zw.Close()
 
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: 30 * time.Second}
+	// Route image fetches through the residential proxy (same exit the page used).
+	// Without it they go from the bare datacenter IP → Copart's image-CDN Incapsula
+	// walls them and the "image" saved is a challenge HTML page → "not a zip file".
+	if px := os.Getenv("SALESHISTORY_PROXY"); px != "" {
+		if pu, perr := url.Parse(px); perr == nil {
+			client.Transport = &http.Transport{Proxy: http.ProxyURL(pu)}
+		}
+	}
 	written := 0
 	for i, u := range urls {
 		req, err := http.NewRequest(http.MethodGet, u, nil)
@@ -625,7 +634,10 @@ func downloadURLsToZip(urls []string, dir, lotNumber string) (string, error) {
 		req.Header.Set("Referer", "https://www.copart.com/")
 
 		resp, err := client.Do(req)
-		if err != nil || resp.StatusCode != http.StatusOK {
+		// Reject non-image responses — an Incapsula challenge comes back as 200
+		// text/html, which must not be written into the zip as a fake .jpg.
+		if err != nil || resp.StatusCode != http.StatusOK ||
+			!strings.HasPrefix(resp.Header.Get("Content-Type"), "image/") {
 			if resp != nil {
 				resp.Body.Close()
 			}
