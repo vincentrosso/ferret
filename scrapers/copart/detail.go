@@ -29,6 +29,9 @@ type DetailResult struct {
 	DamagePrimary      string       `json:"damage_primary,omitempty"`
 	DamageSecondary    string       `json:"damage_secondary,omitempty"`
 	RunAndDrive        string       `json:"run_and_drive,omitempty"`
+	Highlights         string       `json:"highlights,omitempty"`
+	TitleType          string       `json:"title_type,omitempty"`
+	OdometerBrand      string       `json:"odometer_brand,omitempty"`
 	ConditionGrade     string       `json:"condition_grade,omitempty"`
 	EngineType         string       `json:"engine_type,omitempty"`
 	Transmission       string       `json:"transmission,omitempty"`
@@ -68,6 +71,10 @@ var (
 	reVIN          = regexp.MustCompile(`(?i)VIN[:\s]+([A-HJ-NPR-Z0-9]{17})`)
 	reGrade        = regexp.MustCompile(`(?i)(?:Condition\s+)?Grade[:\s]*([\d.]+)`)
 	reRunDrive     = regexp.MustCompile(`(?i)Run\s*and\s*Drive[:\s]*(Yes|No)`)
+	reHighlights   = regexp.MustCompile(`(?is)Highlights:\s*(.*?)\s*\nNotes:`)
+	reRunsDrives   = regexp.MustCompile(`(?i)\bRuns?\s+and\s+Drives?\b`)
+	reTitleCode    = regexp.MustCompile(`(?is)Title code:\s*(.*?)\s*\n\s*Odometer`)
+	reOdoBrand     = regexp.MustCompile(`(?is)Odometer:\s*[\d,]+\s*mi\s*\n\s*(Not Actual[A-Za-z ]*|Exceeds Mechanical[A-Za-z ]*|Exempt|Actual)`)
 	reDriveType    = regexp.MustCompile(`(?i)\b(FWD|RWD|AWD|4WD|4x4|All[\s-]Wheel|Front[\s-]Wheel|Rear[\s-]Wheel)\b`)
 	reFuelType     = regexp.MustCompile(`(?i)Fuel[:\s]*(Gasoline|Gas|Diesel|Electric|Hybrid|Plug-in|PHEV|EV)`)
 	reLossType     = regexp.MustCompile(`(?i)Loss\s*Type[:\s]*([A-Za-z &/]+?)(?:\n|$)`)
@@ -229,7 +236,18 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 		res.VIN = ""
 	}
 	res.ConditionGrade = reMatch(reGrade, bodyText, 1)
-	res.RunAndDrive = reMatch(reRunDrive, bodyText, 1)
+	// Copart shows "Run and Drive" as a positive Highlights badge — PRESENCE
+	// means it runs; absence = unknown, NOT a non-runner. The old regex
+	// grabbed the "No" from the trailing "Notes:" label, false-flagging every
+	// running lot as a non-runner (and triggering the honest-margin ×0.65).
+	res.Highlights = strings.TrimSpace(reMatch(reHighlights, bodyText, 1))
+	if reRunsDrives.MatchString(res.Highlights) {
+		res.RunAndDrive = "Yes"
+	} else {
+		res.RunAndDrive = ""
+	}
+	res.TitleType = strings.Join(strings.Fields(reMatch(reTitleCode, bodyText, 1)), " ")
+	res.OdometerBrand = strings.TrimSpace(reMatch(reOdoBrand, bodyText, 1))
 	if m := reDriveType.FindStringSubmatch(bodyText); len(m) >= 2 {
 		res.DriveType = strings.ToUpper(m[1])
 	}
