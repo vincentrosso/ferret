@@ -54,4 +54,7 @@ open('reports/index.html','w').write(f'<!DOCTYPE html><html><head><meta charset=
 print('index updated')
 "
 
+# Publish reports to the web root (FastAPI + nginx serve /reports from /var/www/autoarb)
+cp -f reports/*.html /var/www/autoarb/ 2>/dev/null && echo 'reports published to web root'
+
 echo "=== done $(date +%H:%M:%S) ==="

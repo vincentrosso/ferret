@@ -723,6 +723,7 @@ func runCopartReport(args []string) {
 func runCopartCheck(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("copart check", flag.ExitOnError)
 	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
+	proxy := fs.String("proxy", "", "residential proxy for Copart")
 	fs.Parse(args)
 
 	email := mustEnv("COPART_EMAIL")
@@ -730,6 +731,7 @@ func runCopartCheck(ctx context.Context, args []string) {
 
 	br, err := browser.New(browser.Options{
 		Headless: true,
+		ProxyURL: *proxy,
 		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
 			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 	})
