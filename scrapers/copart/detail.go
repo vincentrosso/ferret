@@ -399,6 +399,13 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 	if imageDir != "" {
 		if err := os.MkdirAll(imageDir, 0o755); err == nil {
 			zipPath, err := clickDownloadImages(s.br.Rod(), page, imageDir, lotM[1])
+			// The button download sometimes "succeeds" by saving Copart's Incapsula
+			// challenge page (a few hundred bytes of HTML) as the zip. Validate it,
+			// and on garbage fall through to the (proxy-routed) URL fallback.
+			if err == nil && !isValidZip(zipPath) {
+				os.Remove(zipPath) //nolint:errcheck
+				err = fmt.Errorf("button download produced a non-zip (likely Incapsula challenge)")
+			}
 			if err != nil {
 				slog.Warn("button download failed, trying URL fallback", "lot", lotM[1], "err", err)
 				urls := scrapeImageURLs(page)
@@ -604,6 +611,18 @@ func scrapeImageURLs(page *rod.Page) []string {
 
 // downloadURLsToZip fetches image URLs one-by-one and writes them into a ZIP archive.
 // Used as fallback when the Copart "Download Images" button is unavailable (e.g. VPS IPs).
+// isValidZip reports whether path is a readable, non-empty zip archive — guards
+// against Copart's Incapsula challenge HTML being accepted as a .zip.
+func isValidZip(path string) bool {
+	r, err := zip.OpenReader(path)
+	if err != nil {
+		return false
+	}
+	n := len(r.File)
+	r.Close() //nolint:errcheck
+	return n > 0
+}
+
 func downloadURLsToZip(urls []string, dir, lotNumber string) (string, error) {
 	dest := filepath.Join(dir, lotNumber+".zip")
 	f, err := os.Create(dest)
