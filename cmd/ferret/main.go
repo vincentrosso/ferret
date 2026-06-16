@@ -88,6 +88,7 @@ func runCopartLogin(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("copart login", flag.ExitOnError)
 	headless := fs.Bool("headless", false, "headless browser (default false — show window for CAPTCHA)")
 	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
+	proxy := fs.String("proxy", "", "residential proxy for Copart (datacenter IPs are Incapsula-walled)")
 	fs.Parse(args)
 
 	email := mustEnv("COPART_EMAIL")
@@ -95,6 +96,7 @@ func runCopartLogin(ctx context.Context, args []string) {
 
 	br, err := browser.New(browser.Options{
 		Headless: *headless,
+		ProxyURL: *proxy,
 		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
 			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 	})

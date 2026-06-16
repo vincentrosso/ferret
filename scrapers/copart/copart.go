@@ -39,46 +39,22 @@ func (s *Scraper) Name() string { return "copart" }
 // homepage → "Sign in" dropdown → "Member" → fill form → submit.
 // Run with headless=false the first time in case of CAPTCHA.
 func (s *Scraper) Login(ctx context.Context) error {
-	page, err := s.br.NewPage(baseURL)
+	page, err := s.br.NewPage(baseURL + "/login/")
 	if err != nil {
-		return fmt.Errorf("open homepage: %w", err)
+		return fmt.Errorf("open login page: %w", err)
 	}
 	defer page.Close() //nolint:errcheck
-
-	slog.Info("waiting for homepage to load...")
-	if err := page.WaitLoad(); err != nil {
-		return fmt.Errorf("homepage load: %w", err)
-	}
-	time.Sleep(1 * time.Second)
-
-	// Click the "Sign in" dropdown button
-	slog.Info("clicking Sign in...")
-	signInBtn, err := page.Timeout(15 * time.Second).Element(`div.desktopScreen div.z-i-999 > button`)
-	if err != nil {
-		return fmt.Errorf("sign-in button not found: %w", err)
-	}
-	if err := signInBtn.Click(proto.InputMouseButtonLeft, 1); err != nil {
-		return fmt.Errorf("click sign-in: %w", err)
-	}
-	time.Sleep(500 * time.Millisecond)
-
-	// Click the "Member" link — this is an <a> tag that does a full navigation to /login
-	slog.Info("clicking Member...")
-	memberLink, err := page.Timeout(10 * time.Second).Element(`div.desktopScreen div.z-i-999 > div a:nth-of-type(1)`)
-	if err != nil {
-		return fmt.Errorf("member link not found: %w", err)
-	}
-	navWait := page.WaitNavigation(proto.PageLifecycleEventNameNetworkIdle)
-	if err := memberLink.Click(proto.InputMouseButtonLeft, 1); err != nil {
-		return fmt.Errorf("click member: %w", err)
-	}
-	navWait()
-	time.Sleep(1 * time.Second) // give Angular time to render the form
+	time.Sleep(1 * time.Second) // let Angular render the form
 
 	slog.Info("waiting for login form...")
-	emailEl, err := page.Timeout(20 * time.Second).Element("#email-member-number")
+	emailEl, err := page.Timeout(30 * time.Second).Element("#email-member-number")
 	if err != nil {
-		return fmt.Errorf("email input not found: %w", err)
+		slog.Warn("login form slow — reloading once")
+		_ = page.Navigate(baseURL + "/login/")
+		emailEl, err = page.Timeout(30 * time.Second).Element("#email-member-number")
+		if err != nil {
+			return fmt.Errorf("email input not found after reload: %w", err)
+		}
 	}
 
 	slog.Info("filling credentials")
@@ -113,20 +89,36 @@ func (s *Scraper) Login(ctx context.Context) error {
 	}
 
 	slog.Info("submitting, waiting for redirect...")
-	wait := page.WaitNavigation(proto.PageLifecycleEventNameNetworkIdle)
 	if err := submitEl.Click(proto.InputMouseButtonLeft, 1); err != nil {
 		return fmt.Errorf("click submit: %w", err)
 	}
-	wait()
-
-	info, err := page.Info()
-	if err != nil {
-		return fmt.Errorf("get page info: %w", err)
+	// Copart login is an Angular SPA submit — the route change lags the click and
+	// isn't a full navigation, so poll the URL rather than WaitNavigation.
+	finalURL := ""
+	for i := 0; i < 25; i++ {
+		time.Sleep(1 * time.Second)
+		if info, e := page.Info(); e == nil {
+			finalURL = info.URL
+			if !strings.Contains(finalURL, "/login") {
+				break
+			}
+		}
 	}
-	if strings.Contains(info.URL, "/login") {
-		return fmt.Errorf("login failed: still on login page (%s)", info.URL)
+	if strings.Contains(finalURL, "/login") {
+		errMsg := ""
+		if el, e := page.Timeout(2 * time.Second).Element(`.error, .alert, [class*="error"], [class*="invalid"], copart-signin .text-danger`); e == nil {
+			if t, e2 := el.Text(); e2 == nil {
+				errMsg = t
+			}
+		}
+		captcha := false
+		if _, e := page.Timeout(2 * time.Second).Element(`iframe[src*="captcha"], iframe[src*="recaptcha"], [class*="captcha"], #px-captcha`); e == nil {
+			captcha = true
+		}
+		slog.Warn("login did not leave /login", "errMsg", errMsg, "captcha", captcha, "url", finalURL)
+		return fmt.Errorf("login failed: still on login page (%s)", finalURL)
 	}
-	slog.Info("login succeeded", "url", info.URL)
+	slog.Info("login succeeded", "url", finalURL)
 
 	res, err := proto.StorageGetCookies{}.Call(page)
 	if err != nil {
