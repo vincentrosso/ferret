@@ -35,6 +35,13 @@ $RUN ferret_copart_sales_data \
   && $PYTHON "$AUTOARB_DIR/ingest_salesdata.py" --file "$DIR/lots-salesdata.json" \
   || echo "  (sales-data step soft-failed — continuing)"
 
+echo "--- 1c enrich TODAY's sales-data auctions → deals auto-watch (blocking) ---"
+# Today-only (watches resolve sale-day only). Full enrich → server auto-watches
+# the BID/WATCH deals for the fleet. Blocks so it never overlaps the detail step
+# below (the box fits one enrich at a time).
+$PYTHON "$AUTOARB_DIR/salesdata_enrich.py" --file "$DIR/lots-salesdata.json" \
+  || echo "  (sales-data enrich soft-failed — continuing)"
+
 echo "--- 2/4 details + images ---"
 $RUN ferret_copart_detail
 
