@@ -33,8 +33,8 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
-// salesDataPath is the member endpoint that serves the bulk sales CSV as a
-// Content-Disposition attachment. Overridable from the CLI in case Copart moves it.
+// salesDataPath is the member SPA export page (NOT a file URL) that hosts the
+// "Download CSV file" trigger. Overridable from the CLI in case Copart moves it.
 const salesDataPath = "/downloadSalesData/"
 
 // SalesFilter narrows the nationwide sales file to the hail-arb playbook. Zero
@@ -95,10 +95,12 @@ const controlsJS = `() => {
 //
 // /downloadSalesData is an Angular SPA page that hosts the export form + download
 // controls — NOT the file itself (confirmed live: a direct navigation just
-// renders the "CSV Sales Data" page, no attachment). The page carries a region
-// dropdown (#countryselect) and a "Download CSV file" button (btn btn-lblue, no
-// id/uname — targeted by text). We set the region to Copart USA, then click the
-// button with the rod download hook armed and save the resulting CSV.
+// renders the "CSV Sales Data" page, no attachment). The page defaults to the
+// account's region (Copart USA) and carries a "Download CSV file" button
+// (btn btn-lblue, no id/uname — targeted by text). We click it with the rod
+// download hook armed and save the resulting CSV. NB: do NOT touch the
+// #countryselect region dropdown — firing its change event navigates the SPA off
+// the export page (away from the button).
 func (s *Scraper) DownloadSalesData(ctx context.Context, dir, rawURL string) (string, error) {
 	if rawURL == "" {
 		rawURL = baseURL + salesDataPath
@@ -118,13 +120,11 @@ func (s *Scraper) DownloadSalesData(ctx context.Context, dir, rawURL string) (st
 		body, finalURL := peekBody(page)
 		return "", fmt.Errorf("sales-data page did not render (finalURL=%s): %w — head=%.200q", finalURL, err, body)
 	}
-	time.Sleep(6 * time.Second) // let Angular finish painting the export form
-
-	setSalesRegionUSA(page)
+	time.Sleep(7 * time.Second) // let Angular finish painting the export form
 
 	// The export trigger is a <button>Download CSV file</button> (class
 	// btn btn-lblue, no stable id) — match it by text.
-	btn, err := page.Timeout(15*time.Second).ElementR("button", "Download CSV file")
+	btn, err := page.Timeout(20*time.Second).ElementR("button", "Download CSV file")
 	if err != nil {
 		slog.Warn("sales-data: download button not found", "controls", dumpControls(page))
 		return "", fmt.Errorf("\"Download CSV file\" button not found: %w", err)
@@ -159,28 +159,6 @@ func (s *Scraper) DownloadSalesData(ctx context.Context, dir, rawURL string) (st
 		body, finalURL := peekBody(page)
 		return "", fmt.Errorf("no download 180s after click (finalURL=%s) — a region/sale/date "+
 			"selection or a Submit step may be required first; head=%.200q", finalURL, body)
-	}
-}
-
-// setSalesRegionUSA best-effort selects "Copart USA" in the region dropdown so
-// the export covers the US inventory. Harmless if it already defaults to USA.
-func setSalesRegionUSA(page *rod.Page) {
-	sel, err := page.Timeout(5 * time.Second).Element("#countryselect")
-	if err != nil {
-		return
-	}
-	if _, err := sel.Eval(`() => {
-		for (const o of this.options) {
-			if (/usa|united states/i.test(o.text)) {
-				this.value = o.value;
-				this.dispatchEvent(new Event('change', { bubbles: true }));
-				return o.text;
-			}
-		}
-		return '';
-	}`); err == nil {
-		slog.Info("sales-data: region set to USA")
-		time.Sleep(1500 * time.Millisecond)
 	}
 }
 
