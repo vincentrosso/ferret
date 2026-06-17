@@ -203,8 +203,14 @@ func runCopartSalesData(ctx context.Context, args []string) {
 	keepCSV := fs.Bool("keep-csv", true, "keep the downloaded CSV after parsing")
 	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
 	outFile := fs.String("out", "", "write JSON results to file (default: stdout)")
-	proxy := fs.String("proxy", "", "residential proxy for Copart (when datacenter IP is throttled)")
+	proxy := fs.String("proxy", "", "residential proxy for Copart (default: $SALESHISTORY_PROXY)")
 	fs.Parse(args)
+
+	// Default the proxy from the env the box already sets, so the scrape-registry
+	// row (whose static params can't carry the env value) gets it for free.
+	if *proxy == "" {
+		*proxy = os.Getenv("SALESHISTORY_PROXY")
+	}
 
 	// -csv parses a file already on disk — no browser, no Copart hit (re-parse /
 	// daily pipeline split between download and parse).
