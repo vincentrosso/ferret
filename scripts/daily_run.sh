@@ -59,17 +59,22 @@ $PYTHON "$AUTOARB_DIR/value_lots.py" \
 echo "--- 5/5 report ---"
 $RUN ferret_copart_report
 
-# Regenerate the landing page via gen_index.py — a clean list of the dated
-# YYYY-MM-DD.html reports ONLY. (The old inline stub globbed *every* reports/*.html,
-# which dragged in the hundreds of lot-*.html pages and clobbered the real landing
-# page on every run.) Written to reports/index.html so the FastAPI /reports/ mount
-# serves it too; the cp below publishes the same file to the web root.
+# Regenerate the daily-report index (clean dated YYYY-MM-DD.html list) via gen_index.py.
+# This is the report listing for the FastAPI /reports/ mount and /ferret/ — NOT the
+# site landing page. The landing page at / is the autoarb app shell (index.html,
+# deployed from the autoarb repo); daily reports live under /ferret + /reports.
 DATES=$(ls reports/2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].html 2>/dev/null | sed 's#.*/##;s#.html##' | tr '\n' ' ')
 python3 "$AUTOARB_DIR/gen_index.py" "$DATES" > reports/index.html \
-  && echo "index updated ($(echo $DATES | wc -w) reports)"
+  && echo "reports index updated ($(echo $DATES | wc -w) reports)"
 
-# Publish reports to the web root (FastAPI + nginx serve /reports from /var/www/autoarb)
-cp -f reports/*.html /var/www/autoarb/ 2>/dev/null && echo 'reports published to web root'
-chown www-data:www-data /var/www/autoarb/index.html 2>/dev/null || true
+# Publish dated reports + lot pages to the web root, but NEVER the app landing page.
+# index.html at the web root is the autoarb app shell — the old `cp -f reports/*.html`
+# globbed reports/index.html over it and broke the landing page every morning
+# (fixed 2026-06-17). Exclude index.html from the copy.
+for f in reports/*.html; do
+  [ "$(basename "$f")" = "index.html" ] && continue
+  cp -f "$f" /var/www/autoarb/ 2>/dev/null
+done
+echo 'reports published to web root (app index.html preserved)'
 
 echo "=== done $(date +%H:%M:%S) ==="
