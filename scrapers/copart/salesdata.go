@@ -24,13 +24,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/proto"
 )
 
 // salesDataPath is the member endpoint that serves the bulk sales CSV as a
@@ -64,15 +62,41 @@ func (f SalesFilter) makeSet() map[string]bool {
 	return m
 }
 
-// DownloadSalesData triggers the member CSV download into dir and returns the
-// saved file path. rawURL overrides the default endpoint when non-empty.
+// controlsJS dumps the interactive controls + download-ish links on the rendered
+// /downloadSalesData SPA page, so the exact export trigger can be targeted
+// without blind-clicking buttons on a logged-in member portal.
+const controlsJS = `() => {
+  const pick = el => ({
+    tag: el.tagName.toLowerCase(),
+    text: (el.innerText || el.value || '').trim().replace(/\s+/g,' ').slice(0,60),
+    id: el.id || '',
+    cls: (el.className || '').toString().slice(0,80),
+    uname: el.getAttribute('data-uname') || '',
+    href: el.getAttribute('href') || '',
+    type: el.getAttribute('type') || '',
+    name: el.getAttribute('name') || ''
+  });
+  const out = { buttons: [], links: [], inputs: [], selects: [] };
+  document.querySelectorAll('button, [role=button], input[type=submit], input[type=button]').forEach(e => out.buttons.push(pick(e)));
+  document.querySelectorAll('a[href]').forEach(e => {
+    const h = (e.getAttribute('href')||'').toLowerCase(), t = (e.innerText||'').toLowerCase();
+    if (/download|csv|salesdata|sales-data|\.zip|export/.test(h) || /download|csv|export/.test(t)) out.links.push(pick(e));
+  });
+  document.querySelectorAll('input').forEach(e => out.inputs.push(pick(e)));
+  document.querySelectorAll('select').forEach(e => out.selects.push(pick(e)));
+  return JSON.stringify(out);
+}`
+
+// DownloadSalesData loads the member /downloadSalesData export page and triggers
+// its CSV download into dir, returning the saved file path. rawURL overrides the
+// page URL when non-empty.
 //
-// We navigate the member homepage first so the browser carries the logged-in
-// cookies + Incapsula clearance, then navigate to the attachment URL — Chrome
-// turns a Content-Disposition:attachment response into a download rather than a
-// render, so the page.Navigate is expected to hang/error; the WaitDownload hook
-// is what actually resolves. A timeout means we got an Incapsula challenge page
-// (or the account isn't member-gated for this export) instead of the file.
+// /downloadSalesData is an Angular SPA page that hosts the export form + download
+// controls — NOT the file itself (confirmed live: a direct navigation just
+// renders the "CSV Sales Data" page, no attachment). So we render the page, then
+// trigger the download from its own controls. This iteration is DISCOVERY: it
+// dumps the page's interactive controls (logged) so the precise export trigger
+// can be wired next, rather than blind-clicking buttons on a logged-in portal.
 func (s *Scraper) DownloadSalesData(ctx context.Context, dir, rawURL string) (string, error) {
 	if rawURL == "" {
 		rawURL = baseURL + salesDataPath
@@ -81,56 +105,25 @@ func (s *Scraper) DownloadSalesData(ctx context.Context, dir, rawURL string) (st
 		return "", fmt.Errorf("make download dir: %w", err)
 	}
 
-	page, err := s.br.NewPage(baseURL + "/")
+	page, err := s.br.NewPage(rawURL)
 	if err != nil {
-		return "", fmt.Errorf("open copart homepage: %w", err)
+		return "", fmt.Errorf("open sales-data page: %w", err)
 	}
-	defer page.Close()          //nolint:errcheck
-	time.Sleep(2 * time.Second) // let the session settle + Incapsula clear
+	defer page.Close() //nolint:errcheck
 
-	dest := filepath.Join(dir, "copart-salesdata.csv")
-
-	slog.Info("sales-data: requesting bulk CSV", "url", rawURL, "dir", dir)
-	wait := s.br.Rod().WaitDownload(dir)
-	ch := make(chan *proto.PageDownloadWillBegin, 1)
-	go func() { ch <- wait() }()
-	// If the response is an attachment, Chrome fires a download and the navigate
-	// hangs; if it's inline (text/csv with no Content-Disposition, or HTML) the
-	// navigate resolves and the body holds the answer. Cover both.
-	go func() { _ = page.Navigate(rawURL) }()
-
-	select {
-	case info := <-ch:
-		if info == nil {
-			return "", fmt.Errorf("download began but info was nil")
-		}
-		src := filepath.Join(dir, info.GUID)
-		if err := os.Rename(src, dest); err != nil {
-			if _, statErr := os.Stat(dest); statErr == nil {
-				return dest, nil
-			}
-			return src, nil // keep the GUID name rather than lose the file
-		}
-		return dest, nil
-	case <-time.After(90 * time.Second):
-		// No attachment download fired. The URL likely rendered inline — peek the
-		// page: if it's CSV, save it from the body; else surface the head so we can
-		// see exactly what Copart returned (challenge / 404 / login redirect).
+	slog.Info("sales-data: loading export page", "url", rawURL)
+	if _, err := page.Timeout(40 * time.Second).Element("button, a[href], select"); err != nil {
 		body, finalURL := peekBody(page)
-		head := body
-		if len(head) > 600 {
-			head = head[:600]
-		}
-		if looksCSV(body) {
-			if err := os.WriteFile(dest, []byte(body), 0o644); err != nil {
-				return "", fmt.Errorf("save inline CSV: %w", err)
-			}
-			slog.Info("sales-data: saved inline CSV (no attachment)", "url", finalURL, "bytes", len(body))
-			return dest, nil
-		}
-		slog.Warn("sales-data: no download + non-CSV response", "finalURL", finalURL, "head", strings.ReplaceAll(head, "\n", "\\n"))
-		return "", fmt.Errorf("no CSV after 90s (finalURL=%s) — Incapsula challenge, login redirect, or wrong endpoint", finalURL)
+		return "", fmt.Errorf("sales-data page did not render (finalURL=%s): %w — head=%.200q", finalURL, err, body)
 	}
+	time.Sleep(6 * time.Second) // let Angular finish painting the export form
+
+	ctrlStr := ""
+	if ctrl, err := page.Timeout(10 * time.Second).Eval(controlsJS); err == nil {
+		ctrlStr = ctrl.Value.Str()
+	}
+	slog.Info("sales-data: discovered page controls", "controls", ctrlStr)
+	return "", fmt.Errorf("DISCOVERY ONLY — export controls logged above; download trigger not yet wired")
 }
 
 // peekBody returns the current page's innerText and final URL, best-effort.
