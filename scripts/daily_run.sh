@@ -59,16 +59,17 @@ $PYTHON "$AUTOARB_DIR/value_lots.py" \
 echo "--- 5/5 report ---"
 $RUN ferret_copart_report
 
-# Regenerate index page listing all reports
-python3 -c "
-import os, glob
-reports = sorted(glob.glob('reports/*.html'), reverse=True)
-links = '\n'.join(f'<li><a href=\"{os.path.basename(r)}\">{os.path.basename(r)}</a></li>' for r in reports)
-open('reports/index.html','w').write(f'<!DOCTYPE html><html><head><meta charset=UTF-8><title>Hail Arb Reports</title><style>body{{font-family:sans-serif;padding:24px;background:#0f172a;color:#e2e8f0}}a{{color:#3b82f6}}li{{margin:6px 0}}</style></head><body><h2>Hail Arb Reports</h2><ul>{links}</ul></body></html>')
-print('index updated')
-"
+# Regenerate the landing page via gen_index.py — a clean list of the dated
+# YYYY-MM-DD.html reports ONLY. (The old inline stub globbed *every* reports/*.html,
+# which dragged in the hundreds of lot-*.html pages and clobbered the real landing
+# page on every run.) Written to reports/index.html so the FastAPI /reports/ mount
+# serves it too; the cp below publishes the same file to the web root.
+DATES=$(ls reports/2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].html 2>/dev/null | sed 's#.*/##;s#.html##' | tr '\n' ' ')
+python3 "$AUTOARB_DIR/gen_index.py" "$DATES" > reports/index.html \
+  && echo "index updated ($(echo $DATES | wc -w) reports)"
 
 # Publish reports to the web root (FastAPI + nginx serve /reports from /var/www/autoarb)
 cp -f reports/*.html /var/www/autoarb/ 2>/dev/null && echo 'reports published to web root'
+chown www-data:www-data /var/www/autoarb/index.html 2>/dev/null || true
 
 echo "=== done $(date +%H:%M:%S) ==="
