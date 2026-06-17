@@ -28,6 +28,13 @@ echo "=== ferret daily run $DATE $(date +%H:%M:%S) ==="
 echo "--- 1/4 search (next 5 days, Toyota/Honda/Lexus, hail) ---"
 $RUN ferret_copart_search
 
+echo "--- 1b bulk sales-data download → light-ingest nationwide hail inventory ---"
+# One CSV (~136k rows) → ranked hail list (lots-salesdata.json) → light rows in
+# `lots`. Detail/vision enrich stays gated (top-10% / check-page), NOT auto-run here.
+$RUN ferret_copart_sales_data \
+  && $PYTHON "$AUTOARB_DIR/ingest_salesdata.py" --file "$DIR/lots-salesdata.json" \
+  || echo "  (sales-data step soft-failed — continuing)"
+
 echo "--- 2/4 details + images ---"
 $RUN ferret_copart_detail
 
