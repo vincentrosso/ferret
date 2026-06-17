@@ -12,10 +12,11 @@ package copart
 // encodes — filter to the hail-arb playbook, and emit the same []Lot the search
 // path does so everything downstream (detail → score → store) is unchanged.
 //
-// The exact CSV column set is not pinned here on purpose: the matcher keys on
-// substrings we're confident about, and DownloadSalesData logs the real header
-// row it sees, so the first live run is self-documenting and the matcher can be
-// tuned from the journal rather than guessed blind.
+// The 59-column schema is known (Id, Yard, Sale Date YYYYMMDD, Lot number, Year,
+// Make, Model Group/Detail, Damage/Secondary, Sale Title State/Type, Odometer
+// (float) + Brand, Est. Retail Value, …). The matcher still keys on substrings —
+// Copart has historically reordered/renamed columns, so header-first parsing is
+// the robustness, not a guess. ParseSalesData logs the live header each run.
 
 import (
 	"context"
@@ -35,6 +36,7 @@ import (
 
 // salesDataPath is the member SPA export page (NOT a file URL) that hosts the
 // "Download CSV file" trigger. Overridable from the CLI in case Copart moves it.
+// The trailing slash is required — the Angular route 404s without it.
 const salesDataPath = "/downloadSalesData/"
 
 // SalesFilter narrows the nationwide sales file to the hail-arb playbook. Zero
@@ -208,9 +210,12 @@ func isLikelyCSV(path string) bool {
 
 // buildSalesColMap resolves logical fields to column indices from the CSV header
 // row, by case-folded substring — robust to Copart's column reorders/renames.
-// Order matters where headers overlap: "secondary damage" is checked before
-// "damage", "est. retail"/"acv" before a bare "bid", "odometer brand" before a
-// bare "odometer".
+// Only the keys salesRowToLot actually reads are mapped; columns the hail-arb
+// playbook doesn't use (vin, color, body, keys, runs, buy-it-now) are left
+// unmapped. "secondary damage"/"odometer brand" are matched BEFORE bare
+// "damage"/"odometer" purely as GUARDS (damage2/odobrand): claiming those columns
+// keeps a reorder from binding them to the read keys — the values themselves are
+// unused.
 func buildSalesColMap(headers []string) colMap {
 	m := colMap{}
 	set := func(key string, i int) {
@@ -225,14 +230,12 @@ func buildSalesColMap(headers []string) colMap {
 			continue
 		case strings.Contains(h, "lot") && (strings.Contains(h, "number") || strings.Contains(h, "lot #") || h == "lot"):
 			set("lotnum", i)
-		case h == "vin" || strings.Contains(h, "vin"):
-			set("vin", i)
 		case strings.Contains(h, "secondary") && strings.Contains(h, "damage"):
-			set("damage2", i)
+			set("damage2", i) // guard: keep "Secondary Damage" off the "damage" key
 		case strings.Contains(h, "damage"):
 			set("damage", i)
 		case strings.Contains(h, "odometer") && strings.Contains(h, "brand"):
-			set("odobrand", i)
+			set("odobrand", i) // guard: keep "Odometer Brand" off the "odometer" key
 		case strings.Contains(h, "odometer") || strings.Contains(h, "mileage"):
 			set("odometer", i)
 		case strings.Contains(h, "retail") || h == "acv" || strings.Contains(h, "est. retail") || strings.Contains(h, "estimated retail"):
@@ -243,10 +246,6 @@ func buildSalesColMap(headers []string) colMap {
 			set("make", i)
 		case strings.Contains(h, "model"):
 			set("model", i) // first model col (group/detail) wins
-		case strings.Contains(h, "body"):
-			set("body", i)
-		case strings.Contains(h, "color"):
-			set("color", i)
 		case strings.Contains(h, "title") && strings.Contains(h, "type"):
 			set("title", i) // "Sale Title Type" (the brand) — NOT "Sale Title State"
 		case strings.Contains(h, "yard") && strings.Contains(h, "name"):
@@ -255,14 +254,8 @@ func buildSalesColMap(headers []string) colMap {
 			set("yard", i)
 		case strings.Contains(h, "sale") && strings.Contains(h, "date"):
 			set("saledate", i)
-		case strings.Contains(h, "buy") && strings.Contains(h, "now"):
-			set("binprice", i)
 		case strings.Contains(h, "high bid") || (strings.Contains(h, "current") && strings.Contains(h, "bid")):
 			set("bid", i)
-		case strings.Contains(h, "runs") || strings.Contains(h, "run and drive") || strings.Contains(h, "run & drive"):
-			set("runs", i)
-		case strings.Contains(h, "keys"):
-			set("keys", i)
 		case strings.Contains(h, "image") || strings.Contains(h, "thumbnail"):
 			set("image", i)
 		}
