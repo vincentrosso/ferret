@@ -60,6 +60,8 @@ func main() {
 		runCopartCheck(ctx, os.Args[3:])
 	case "copart search":
 		runCopartSearch(ctx, os.Args[3:])
+	case "copart sales-data":
+		runCopartSalesData(ctx, os.Args[3:])
 	case "copart from-url":
 		runCopartFromURL(ctx, os.Args[3:])
 	case "copart detail":
@@ -164,6 +166,93 @@ func runCopartSearch(ctx context.Context, args []string) {
 
 	ranked := scoring.RankAll(lots)
 	slog.Info("search complete", "total_lots", len(ranked))
+
+	out := os.Stdout
+	if *outFile != "" {
+		f, err := os.Create(*outFile)
+		if err != nil {
+			fatal("create output file", err)
+		}
+		defer f.Close()
+		out = f
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	enc.Encode(ranked)
+	if *outFile != "" {
+		fmt.Fprintf(os.Stderr, "wrote %d ranked lots to %s\n", len(ranked), *outFile)
+	}
+}
+
+// runCopartSalesData downloads Copart's nationwide bulk "Sales Data" CSV, filters
+// it to the hail-arb playbook, and emits the same ranked []Lot JSON as
+// 'copart search' — a drop-in inventory source that replaces paginated scraping
+// with a single file. See scrapers/copart/salesdata.go.
+func runCopartSalesData(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("copart sales-data", flag.ExitOnError)
+	makes := fs.String("makes", "", "comma-separated make allow-list (default: all makes)")
+	yearMin := fs.Int("year-min", 0, "minimum model year (0 = no floor)")
+	yearMax := fs.Int("year-max", 0, "maximum model year (0 = no ceiling)")
+	odoMax := fs.Int("odo-max", 0, "max odometer miles (0 = no cap)")
+	retailMax := fs.Float64("retail-max", 0, "max Copart Est. Retail / ACV (0 = no cap)")
+	hailOnly := fs.Bool("hail-only", true, "keep only hail-damage lots")
+	cleanOnly := fs.Bool("clean-only", false, "drop salvage-title lots")
+	dir := fs.String("dir", "data", "directory to save the downloaded CSV")
+	srcURL := fs.String("url", "", "override the sales-data download URL")
+	keepCSV := fs.Bool("keep-csv", true, "keep the downloaded CSV after parsing")
+	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
+	outFile := fs.String("out", "", "write JSON results to file (default: stdout)")
+	proxy := fs.String("proxy", "", "residential proxy for Copart (when datacenter IP is throttled)")
+	fs.Parse(args)
+
+	br, err := browser.New(browser.Options{
+		Headless: true,
+		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+		ProxyURL: *proxy,
+	})
+	if err != nil {
+		fatal("launch browser", err)
+	}
+	defer br.Close()
+
+	email := mustEnv("COPART_EMAIL")
+	password := mustEnv("COPART_PASSWORD")
+	sc := copart.New(br, email, password, *cookiePath)
+	if err := sc.LoadSession(ctx); err != nil {
+		slog.Warn("no saved session — run: ferret copart login", "err", err)
+	}
+
+	csvPath, err := sc.DownloadSalesData(ctx, *dir, *srcURL)
+	if err != nil {
+		fatal("download sales-data", err)
+	}
+	slog.Info("sales-data downloaded", "path", csvPath)
+
+	var makeList []string
+	if strings.TrimSpace(*makes) != "" {
+		makeList = strings.Split(strings.ToUpper(*makes), ",")
+	}
+	filter := copart.SalesFilter{
+		Makes:     makeList,
+		YearMin:   *yearMin,
+		YearMax:   *yearMax,
+		OdoMax:    *odoMax,
+		RetailMax: *retailMax,
+		HailOnly:  *hailOnly,
+		CleanOnly: *cleanOnly,
+	}
+
+	lots, err := copart.ParseSalesData(csvPath, filter)
+	if err != nil {
+		fatal("parse sales-data", err)
+	}
+	if !*keepCSV {
+		os.Remove(csvPath) //nolint:errcheck
+	}
+
+	ranked := scoring.RankAll(lots)
+	slog.Info("sales-data complete", "total_lots", len(ranked))
 
 	out := os.Stdout
 	if *outFile != "" {
@@ -810,6 +899,9 @@ Usage:
   ferret copart search  [-makes A,B] [-year-min N] [-odo-max N]        search lots
                         [-days N] [-damage CODE] [-title CODE]
                         [-pages N] [-out file.json]
+  ferret copart sales-data [-makes A,B] [-year-min N] [-year-max N]    bulk inventory CSV
+                        [-odo-max N] [-retail-max N] [-hail-only]       (downloadSalesData)
+                        [-clean-only] [-dir d] [-url U] [-out f.json] [-proxy URL]
   ferret copart detail  -lot NUMBER | -from search.json                 scrape lot details
                         [-workers N] [-data dir] [-images=false]
   ferret copart analyze [-in lots-ranked.json] [-data dir] [-out lots-analyzed.json]
