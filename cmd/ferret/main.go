@@ -199,35 +199,43 @@ func runCopartSalesData(ctx context.Context, args []string) {
 	cleanOnly := fs.Bool("clean-only", false, "drop salvage-title lots")
 	dir := fs.String("dir", "data", "directory to save the downloaded CSV")
 	srcURL := fs.String("url", "", "override the sales-data download URL")
+	csvIn := fs.String("csv", "", "parse an existing CSV instead of downloading (skips Copart)")
 	keepCSV := fs.Bool("keep-csv", true, "keep the downloaded CSV after parsing")
 	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
 	outFile := fs.String("out", "", "write JSON results to file (default: stdout)")
 	proxy := fs.String("proxy", "", "residential proxy for Copart (when datacenter IP is throttled)")
 	fs.Parse(args)
 
-	br, err := browser.New(browser.Options{
-		Headless: true,
-		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
-			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-		ProxyURL: *proxy,
-	})
-	if err != nil {
-		fatal("launch browser", err)
-	}
-	defer br.Close()
+	// -csv parses a file already on disk — no browser, no Copart hit (re-parse /
+	// daily pipeline split between download and parse).
+	csvPath := *csvIn
+	if csvPath == "" {
+		br, err := browser.New(browser.Options{
+			Headless: true,
+			UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+				"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+			ProxyURL: *proxy,
+		})
+		if err != nil {
+			fatal("launch browser", err)
+		}
+		defer br.Close()
 
-	email := mustEnv("COPART_EMAIL")
-	password := mustEnv("COPART_PASSWORD")
-	sc := copart.New(br, email, password, *cookiePath)
-	if err := sc.LoadSession(ctx); err != nil {
-		slog.Warn("no saved session — run: ferret copart login", "err", err)
-	}
+		email := mustEnv("COPART_EMAIL")
+		password := mustEnv("COPART_PASSWORD")
+		sc := copart.New(br, email, password, *cookiePath)
+		if err := sc.LoadSession(ctx); err != nil {
+			slog.Warn("no saved session — run: ferret copart login", "err", err)
+		}
 
-	csvPath, err := sc.DownloadSalesData(ctx, *dir, *srcURL)
-	if err != nil {
-		fatal("download sales-data", err)
+		csvPath, err = sc.DownloadSalesData(ctx, *dir, *srcURL)
+		if err != nil {
+			fatal("download sales-data", err)
+		}
+		slog.Info("sales-data downloaded", "path", csvPath)
+	} else {
+		slog.Info("sales-data: parsing existing CSV (download skipped)", "path", csvPath)
 	}
-	slog.Info("sales-data downloaded", "path", csvPath)
 
 	var makeList []string
 	if strings.TrimSpace(*makes) != "" {
@@ -247,7 +255,7 @@ func runCopartSalesData(ctx context.Context, args []string) {
 	if err != nil {
 		fatal("parse sales-data", err)
 	}
-	if !*keepCSV {
+	if !*keepCSV && *csvIn == "" { // never delete a user-supplied -csv input
 		os.Remove(csvPath) //nolint:errcheck
 	}
 
