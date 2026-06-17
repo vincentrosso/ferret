@@ -247,8 +247,8 @@ func buildSalesColMap(headers []string) colMap {
 			set("body", i)
 		case strings.Contains(h, "color"):
 			set("color", i)
-		case strings.Contains(h, "title"):
-			set("title", i)
+		case strings.Contains(h, "title") && strings.Contains(h, "type"):
+			set("title", i) // "Sale Title Type" (the brand) — NOT "Sale Title State"
 		case strings.Contains(h, "yard") && strings.Contains(h, "name"):
 			set("yard", i)
 		case strings.Contains(h, "location") && (strings.Contains(h, "city") || strings.Contains(h, "name")):
@@ -351,6 +351,21 @@ func (f SalesFilter) keep(lot Lot, makes map[string]bool) bool {
 	return true
 }
 
+// normalizeSalesDate converts the sales CSV's date to "MM/DD/YYYY". Despite the
+// "Sale Date M/D/CY" header, the values are YYYYMMDD integers (e.g. 20260619).
+func normalizeSalesDate(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) == 8 {
+		if _, err := strconv.Atoi(s); err == nil {
+			return s[4:6] + "/" + s[6:8] + "/" + s[0:4]
+		}
+	}
+	if d := parseCopartSaleDate(s); d != "" {
+		return d
+	}
+	return s
+}
+
 // salesRowToLot maps one CSV record to a Lot via the header-derived column map.
 // Returns false when the row carries no usable lot number / make.
 func salesRowToLot(rec []string, cols colMap, now time.Time) (Lot, bool) {
@@ -384,33 +399,33 @@ func salesRowToLot(rec []string, cols colMap, now time.Time) (Lot, bool) {
 	if lot.Year > 0 {
 		lot.Title = strings.TrimSpace(fmt.Sprintf("%d %s %s", lot.Year, lot.Make, lot.Model))
 	}
-	if odo := reStripNonDigit.ReplaceAllString(cell("odometer"), ""); odo != "" {
-		if n, err := strconv.Atoi(odo); err == nil {
-			lot.Odometer = n
+	// Odometer comes as a float string ("125501.0") — parse as float, not
+	// strip-non-digits (which would turn "125501.0" into 1255010).
+	if odo := cell("odometer"); odo != "" {
+		if fv, err := strconv.ParseFloat(strings.ReplaceAll(odo, ",", ""), 64); err == nil && fv >= 0 {
+			lot.Odometer = int(fv)
 		}
 	}
 	lot.DamagePrimary = cell("damage")
-	// Title type, e.g. "CT" / "Cert Of Title" / "Salvage".
+	// Sale Title Type code, e.g. "CT" (clean) / "SC" / "SV" (salvage).
 	if t := cell("title"); t != "" {
 		lot.TitleType = strings.TrimSpace(strings.SplitN(t, "-", 2)[0])
 	}
 	if y := cell("yard"); y != "" {
 		lot.YardName = strings.TrimRight(strings.TrimSpace(y), " -")
 	}
-	if sd := cell("saledate"); sd != "" {
-		if d := parseCopartSaleDate(sd); d != "" {
-			lot.SaleDate = d
-		} else {
-			lot.SaleDate = sd
-		}
-	}
+	lot.SaleDate = normalizeSalesDate(cell("saledate"))
 	if r := cell("retail"); r != "" {
 		lot.EstRetail = parseMoney(reMoney.FindString(r))
 	}
 	if b := cell("bid"); b != "" {
 		lot.CurrentBid = parseMoney(reMoney.FindString(b))
 	}
-	if img := cell("image"); strings.HasPrefix(img, "http") {
+	// Thumbnail comes scheme-less ("cs.copart.com/...") — add https://.
+	if img := cell("image"); img != "" {
+		if !strings.HasPrefix(img, "http") {
+			img = "https://" + img
+		}
 		lot.ThumbnailURL = img
 	}
 
