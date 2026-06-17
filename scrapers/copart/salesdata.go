@@ -24,11 +24,13 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/proto"
 )
 
 // salesDataPath is the member endpoint that serves the bulk sales CSV as a
@@ -93,10 +95,10 @@ const controlsJS = `() => {
 //
 // /downloadSalesData is an Angular SPA page that hosts the export form + download
 // controls — NOT the file itself (confirmed live: a direct navigation just
-// renders the "CSV Sales Data" page, no attachment). So we render the page, then
-// trigger the download from its own controls. This iteration is DISCOVERY: it
-// dumps the page's interactive controls (logged) so the precise export trigger
-// can be wired next, rather than blind-clicking buttons on a logged-in portal.
+// renders the "CSV Sales Data" page, no attachment). The page carries a region
+// dropdown (#countryselect) and a "Download CSV file" button (btn btn-lblue, no
+// id/uname — targeted by text). We set the region to Copart USA, then click the
+// button with the rod download hook armed and save the resulting CSV.
 func (s *Scraper) DownloadSalesData(ctx context.Context, dir, rawURL string) (string, error) {
 	if rawURL == "" {
 		rawURL = baseURL + salesDataPath
@@ -118,12 +120,77 @@ func (s *Scraper) DownloadSalesData(ctx context.Context, dir, rawURL string) (st
 	}
 	time.Sleep(6 * time.Second) // let Angular finish painting the export form
 
-	ctrlStr := ""
-	if ctrl, err := page.Timeout(10 * time.Second).Eval(controlsJS); err == nil {
-		ctrlStr = ctrl.Value.Str()
+	setSalesRegionUSA(page)
+
+	// The export trigger is a <button>Download CSV file</button> (class
+	// btn btn-lblue, no stable id) — match it by text.
+	btn, err := page.Timeout(15*time.Second).ElementR("button", "Download CSV file")
+	if err != nil {
+		slog.Warn("sales-data: download button not found", "controls", dumpControls(page))
+		return "", fmt.Errorf("\"Download CSV file\" button not found: %w", err)
 	}
-	slog.Info("sales-data: discovered page controls", "controls", ctrlStr)
-	return "", fmt.Errorf("DISCOVERY ONLY — export controls logged above; download trigger not yet wired")
+	btn.MustScrollIntoView()
+	time.Sleep(300 * time.Millisecond)
+
+	dest := filepath.Join(dir, "copart-salesdata.csv")
+	slog.Info("sales-data: clicking Download CSV file")
+	wait := s.br.Rod().WaitDownload(dir)
+	ch := make(chan *proto.PageDownloadWillBegin, 1)
+	go func() { ch <- wait() }()
+	if err := btn.Click(proto.InputMouseButtonLeft, 1); err != nil {
+		return "", fmt.Errorf("click download button: %w", err)
+	}
+
+	select {
+	case info := <-ch:
+		if info == nil {
+			return "", fmt.Errorf("download began but info was nil")
+		}
+		src := filepath.Join(dir, info.GUID)
+		if err := os.Rename(src, dest); err != nil {
+			if _, statErr := os.Stat(dest); statErr == nil {
+				return dest, nil
+			}
+			return src, nil
+		}
+		slog.Info("sales-data: CSV downloaded", "path", dest)
+		return dest, nil
+	case <-time.After(180 * time.Second):
+		body, finalURL := peekBody(page)
+		return "", fmt.Errorf("no download 180s after click (finalURL=%s) — a region/sale/date "+
+			"selection or a Submit step may be required first; head=%.200q", finalURL, body)
+	}
+}
+
+// setSalesRegionUSA best-effort selects "Copart USA" in the region dropdown so
+// the export covers the US inventory. Harmless if it already defaults to USA.
+func setSalesRegionUSA(page *rod.Page) {
+	sel, err := page.Timeout(5 * time.Second).Element("#countryselect")
+	if err != nil {
+		return
+	}
+	if _, err := sel.Eval(`() => {
+		for (const o of this.options) {
+			if (/usa|united states/i.test(o.text)) {
+				this.value = o.value;
+				this.dispatchEvent(new Event('change', { bubbles: true }));
+				return o.text;
+			}
+		}
+		return '';
+	}`); err == nil {
+		slog.Info("sales-data: region set to USA")
+		time.Sleep(1500 * time.Millisecond)
+	}
+}
+
+// dumpControls returns the page's interactive controls as JSON (best-effort),
+// for diagnosing a missing/renamed export trigger.
+func dumpControls(page *rod.Page) string {
+	if ctrl, err := page.Timeout(10 * time.Second).Eval(controlsJS); err == nil {
+		return ctrl.Value.Str()
+	}
+	return ""
 }
 
 // peekBody returns the current page's innerText and final URL, best-effort.
@@ -137,17 +204,6 @@ func peekBody(page *rod.Page) (string, string) {
 		body = r.Value.Str()
 	}
 	return body, finalURL
-}
-
-// looksCSV reports whether s reads as comma-delimited tabular text rather than
-// an HTML challenge/error page.
-func looksCSV(s string) bool {
-	t := strings.ToLower(strings.TrimSpace(s))
-	if t == "" || strings.HasPrefix(t, "<!doctype") || strings.HasPrefix(t, "<html") || strings.Contains(t, "incapsula") {
-		return false
-	}
-	first := strings.SplitN(t, "\n", 2)[0]
-	return strings.Count(first, ",") >= 3
 }
 
 // isLikelyCSV guards against Copart's Incapsula challenge HTML being accepted as
