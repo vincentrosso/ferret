@@ -355,6 +355,10 @@ func (f SalesFilter) keep(lot Lot, makes map[string]bool) bool {
 // "Sale Date M/D/CY" header, the values are YYYYMMDD integers (e.g. 20260619).
 func normalizeSalesDate(s string) string {
 	s = strings.TrimSpace(s)
+	// "0" is the sentinel for "not yet scheduled into a sale" — treat as no date.
+	if s == "" || strings.Trim(s, "0") == "" {
+		return ""
+	}
 	if len(s) == 8 {
 		if _, err := strconv.Atoi(s); err == nil {
 			return s[4:6] + "/" + s[6:8] + "/" + s[0:4]
