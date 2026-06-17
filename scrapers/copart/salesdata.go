@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 )
 
@@ -87,11 +88,15 @@ func (s *Scraper) DownloadSalesData(ctx context.Context, dir, rawURL string) (st
 	defer page.Close()          //nolint:errcheck
 	time.Sleep(2 * time.Second) // let the session settle + Incapsula clear
 
+	dest := filepath.Join(dir, "copart-salesdata.csv")
+
 	slog.Info("sales-data: requesting bulk CSV", "url", rawURL, "dir", dir)
 	wait := s.br.Rod().WaitDownload(dir)
 	ch := make(chan *proto.PageDownloadWillBegin, 1)
 	go func() { ch <- wait() }()
-	// The download navigation never "completes" as a page load — fire and forget.
+	// If the response is an attachment, Chrome fires a download and the navigate
+	// hangs; if it's inline (text/csv with no Content-Disposition, or HTML) the
+	// navigate resolves and the body holds the answer. Cover both.
 	go func() { _ = page.Navigate(rawURL) }()
 
 	select {
@@ -100,7 +105,6 @@ func (s *Scraper) DownloadSalesData(ctx context.Context, dir, rawURL string) (st
 			return "", fmt.Errorf("download began but info was nil")
 		}
 		src := filepath.Join(dir, info.GUID)
-		dest := filepath.Join(dir, "copart-salesdata.csv")
 		if err := os.Rename(src, dest); err != nil {
 			if _, statErr := os.Stat(dest); statErr == nil {
 				return dest, nil
@@ -108,10 +112,49 @@ func (s *Scraper) DownloadSalesData(ctx context.Context, dir, rawURL string) (st
 			return src, nil // keep the GUID name rather than lose the file
 		}
 		return dest, nil
-	case <-time.After(120 * time.Second):
-		return "", fmt.Errorf("sales-data download timed out after 120s " +
-			"(Incapsula challenge, or export not enabled for this member?)")
+	case <-time.After(90 * time.Second):
+		// No attachment download fired. The URL likely rendered inline — peek the
+		// page: if it's CSV, save it from the body; else surface the head so we can
+		// see exactly what Copart returned (challenge / 404 / login redirect).
+		body, finalURL := peekBody(page)
+		head := body
+		if len(head) > 600 {
+			head = head[:600]
+		}
+		if looksCSV(body) {
+			if err := os.WriteFile(dest, []byte(body), 0o644); err != nil {
+				return "", fmt.Errorf("save inline CSV: %w", err)
+			}
+			slog.Info("sales-data: saved inline CSV (no attachment)", "url", finalURL, "bytes", len(body))
+			return dest, nil
+		}
+		slog.Warn("sales-data: no download + non-CSV response", "finalURL", finalURL, "head", strings.ReplaceAll(head, "\n", "\\n"))
+		return "", fmt.Errorf("no CSV after 90s (finalURL=%s) — Incapsula challenge, login redirect, or wrong endpoint", finalURL)
 	}
+}
+
+// peekBody returns the current page's innerText and final URL, best-effort.
+func peekBody(page *rod.Page) (string, string) {
+	finalURL := ""
+	if info, err := page.Info(); err == nil {
+		finalURL = info.URL
+	}
+	body := ""
+	if r, err := page.Timeout(8 * time.Second).Eval(`() => document.body ? document.body.innerText : document.documentElement.outerHTML`); err == nil {
+		body = r.Value.Str()
+	}
+	return body, finalURL
+}
+
+// looksCSV reports whether s reads as comma-delimited tabular text rather than
+// an HTML challenge/error page.
+func looksCSV(s string) bool {
+	t := strings.ToLower(strings.TrimSpace(s))
+	if t == "" || strings.HasPrefix(t, "<!doctype") || strings.HasPrefix(t, "<html") || strings.Contains(t, "incapsula") {
+		return false
+	}
+	first := strings.SplitN(t, "\n", 2)[0]
+	return strings.Count(first, ",") >= 3
 }
 
 // isLikelyCSV guards against Copart's Incapsula challenge HTML being accepted as
