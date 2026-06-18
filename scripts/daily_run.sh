@@ -10,9 +10,16 @@ umask 002
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$DIR"
 
-set -a; source .env; set +a
-
 AUTOARB_DIR="${AUTOARB_DIR:-/opt/autoarb}"
+# Source the autoarb .env FIRST as a base (DATABASE_URL, OPENROUTER_API_KEY, …) so
+# every shell-out substep — ingest_salesdata.py, salesdata_enrich.py, value_lots.py —
+# sees them, then ferret's own .env on top so ferret-specific vars win. This makes
+# DATABASE_URL durable instead of requiring a hand-added copy in /opt/ferret/.env
+# (the silent KeyError:'DATABASE_URL' that soft-failed the sales-data ingest).
+set -a
+[ -f "$AUTOARB_DIR/.env" ] && source "$AUTOARB_DIR/.env"
+[ -f .env ] && source .env
+set +a
 PYTHON="${AUTOARB_PYTHON:-python3}"
 RUN="$PYTHON $AUTOARB_DIR/run_scrape.py"
 export SCRAPE_TRIGGER=cron
