@@ -54,6 +54,25 @@ func (u UpcomingLot) Countdown() string {
 	}
 }
 
+// DayLabel groups lots into per-day sections on the upcoming page — a friendly date
+// with a Today/Tomorrow/in-N-days tag. Unknown dates bucket last.
+func (u UpcomingLot) DayLabel() string {
+	d := u.DaysUntil()
+	if d == -999 {
+		return "Sale date TBD"
+	}
+	rel := ""
+	switch {
+	case d == 0:
+		rel = " · Today"
+	case d == 1:
+		rel = " · Tomorrow"
+	case d <= 7:
+		rel = fmt.Sprintf(" · in %d days", d)
+	}
+	return u.saleTime().Format("Mon, Jan 2") + rel
+}
+
 // CountdownColor highlights imminent auctions.
 func (u UpcomingLot) CountdownColor() string {
 	d := u.DaysUntil()
@@ -147,8 +166,28 @@ func GenerateUpcoming(lots []UpcomingLot, outPath string) error {
 		return err
 	}
 	defer f.Close()
+	// Group the sorted lots into per-day sections — "best deals for the day". keep is
+	// already sorted soonest-day-first and best-deal-first within a day (verdict then
+	// score, above), so consecutive same-day lots form each group in rank order.
+	type dayGroup struct {
+		Label string
+		Count int
+		Lots  []UpcomingLot
+	}
+	var groups []dayGroup
+	for _, l := range keep {
+		lbl := l.DayLabel()
+		if len(groups) == 0 || groups[len(groups)-1].Label != lbl {
+			groups = append(groups, dayGroup{Label: lbl})
+		}
+		g := &groups[len(groups)-1]
+		g.Lots = append(g.Lots, l)
+		g.Count++
+	}
+
 	return upcomingTmpl.Execute(f, map[string]any{
-		"Lots":      keep,
+		"Groups":    groups,
+		"Total":     len(keep),
 		"Generated": time.Now().Format("Jan 2, 2006 3:04 PM"),
 	})
 }
@@ -216,16 +255,18 @@ a { text-decoration: none; color: inherit; }
 </head>
 <body>
 <div class="hdr">
-  <h1>Upcoming Auctions — soonest deals first</h1>
-  <div class="sub">{{.Generated}} &nbsp;·&nbsp; {{len .Lots}} deals to watch &amp; bid &nbsp;·&nbsp;
+  <h1>Best Deals by Sale Day</h1>
+  <div class="sub">{{.Generated}} &nbsp;·&nbsp; {{.Total}} deals to watch &amp; bid &nbsp;·&nbsp;
     <a href="/ferret/">Full reports →</a> &nbsp;·&nbsp; <a href="/watcher.html">Bid watcher →</a>
   </div>
 </div>
 
 <div class="list">
-{{- if not .Lots}}
+{{- if not .Groups}}
 <div style="padding:40px;text-align:center;color:#475569;font-size:0.85rem">No actionable deals with upcoming auction dates right now.</div>
 {{- end}}
+{{- range .Groups}}
+<div style="margin:22px 0 8px;color:#f59e0b;font-weight:800;font-size:0.95rem;border-bottom:1px solid #334155;padding-bottom:5px">{{.Label}} <span style="color:#64748b;font-weight:600;font-size:0.76rem">· {{.Count}} deal{{if ne .Count 1}}s{{end}}</span></div>
 {{- range .Lots}}
 <div class="row">
   {{- if .ThumbnailURL}}
@@ -264,6 +305,7 @@ a { text-decoration: none; color: inherit; }
     {{- end}}
   </div>
 </div>
+{{- end}}
 {{- end}}
 </div>
 
