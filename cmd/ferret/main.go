@@ -16,12 +16,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/go-rod/rod/lib/proto"
 	"github.com/vincentrosso/ferret/internal/browser"
 	"github.com/vincentrosso/ferret/internal/damage"
 	"github.com/vincentrosso/ferret/internal/report"
@@ -63,6 +65,8 @@ func main() {
 		runCopartSalesData(ctx, os.Args[3:])
 	case "copart todays-auctions":
 		runCopartTodaysAuctions(ctx, os.Args[3:])
+	case "copart probe-net":
+		runCopartProbeNet(ctx, os.Args[3:])
 	case "copart from-url":
 		runCopartFromURL(ctx, os.Args[3:])
 	case "copart detail":
@@ -792,6 +796,105 @@ func runCopartTodaysAuctions(ctx context.Context, args []string) {
 	} else {
 		fmt.Println(string(out))
 	}
+}
+
+// ── copart probe-net (token-endpoint discovery for Path B) ───────────────────
+// Joins a sale's auctionDashboard and dumps matching /data/ network responses, so we
+// can find which member API returns the Solace tokens (auctionToken, inboundChannelName,
+// sessionBuyerToken, clusterUrls) the direct watcher needs. Main-box only — never the
+// live watcher fleet. Throwaway investigation tool.
+func runCopartProbeNet(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("copart probe-net", flag.ExitOnError)
+	saleArg := fs.String("sale", "", "sale id to join, e.g. 98-A")
+	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
+	proxy := fs.String("proxy", "", "residential proxy (default $SALESHISTORY_PROXY)")
+	matchRe := fs.String("match", `data/|auction|[Tt]oken|[Cc]hannel|solace|[Cc]luster|[Bb]uyer`, "regex of URLs to dump")
+	wait := fs.Int("wait", 12, "seconds to keep capturing after the join nav")
+	fs.Parse(args)
+	if *proxy == "" {
+		*proxy = os.Getenv("SALESHISTORY_PROXY")
+	}
+	if *saleArg == "" {
+		fatal("need -sale", fmt.Errorf("e.g. -sale 98-A"))
+	}
+
+	br, err := browser.New(browser.Options{
+		Headless: true,
+		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+		ProxyURL: *proxy,
+	})
+	if err != nil {
+		fatal("launch browser", err)
+	}
+	defer br.Close()
+
+	sc := copart.New(br, os.Getenv("COPART_EMAIL"), os.Getenv("COPART_PASSWORD"), *cookiePath)
+	if err := sc.LoadSession(ctx); err != nil {
+		fatal("load session", err)
+	}
+
+	page, err := br.NewPage("about:blank")
+	if err != nil {
+		fatal("new page", err)
+	}
+	if err := (proto.NetworkEnable{}).Call(page); err != nil {
+		fatal("network enable", err)
+	}
+
+	re := regexp.MustCompile(*matchRe)
+	var mu sync.Mutex
+	reqURL := map[proto.NetworkRequestID]string{}
+	type hit struct{ url, body string }
+	var hits []hit
+
+	go page.EachEvent(
+		func(e *proto.NetworkResponseReceived) {
+			mu.Lock()
+			reqURL[e.RequestID] = e.Response.URL
+			mu.Unlock()
+		},
+		func(e *proto.NetworkLoadingFinished) {
+			mu.Lock()
+			u := reqURL[e.RequestID]
+			mu.Unlock()
+			if u == "" || !re.MatchString(u) {
+				return
+			}
+			r, err := proto.NetworkGetResponseBody{RequestID: e.RequestID}.Call(page)
+			if err != nil {
+				return
+			}
+			body := r.Body
+			if r.Base64Encoded {
+				if dec, e2 := base64.StdEncoding.DecodeString(body); e2 == nil {
+					body = string(dec)
+				}
+			}
+			mu.Lock()
+			hits = append(hits, hit{u, body})
+			mu.Unlock()
+		},
+	)()
+
+	saleURL := "https://www.copart.com/auctionDashboard?auctionDetails=" + url.QueryEscape(*saleArg)
+	fmt.Fprintf(os.Stderr, "joining %s …\n", saleURL)
+	if err := page.Navigate(saleURL); err != nil {
+		fatal("navigate", err)
+	}
+	_ = page.Timeout(30 * time.Second).WaitLoad()
+	time.Sleep(time.Duration(*wait) * time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, h := range hits {
+		b := h.body
+		if len(b) > 2200 {
+			b = b[:2200] + "…(truncated)"
+		}
+		fmt.Printf("\n===== %s =====\n%s\n", h.url, b)
+	}
+	fmt.Fprintf(os.Stderr, "\ncaptured %d matching responses\n", len(hits))
 }
 
 // pyValue fetches the canonical private-party value from the autoarb value machine
