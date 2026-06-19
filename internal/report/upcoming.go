@@ -31,8 +31,13 @@ func (u UpcomingLot) DaysUntil() int {
 	if t.IsZero() {
 		return -999
 	}
-	today := time.Now().Truncate(24 * time.Hour)
-	return int(t.Truncate(24*time.Hour).Sub(today).Hours() / 24)
+	// Calendar-day diff in the binary's local TZ (PT under the 5am cron). Build both as
+	// UTC-midnight dates so Truncate's UTC behaviour can't shift the day across the
+	// UTC/PT boundary (the old time.Now().Truncate(24h) read evening-PT as "tomorrow").
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	sale := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	return int(sale.Sub(today).Hours() / 24)
 }
 
 // Countdown is a human label for how soon the auction is.
