@@ -61,6 +61,8 @@ func main() {
 		runCopartSearch(ctx, os.Args[3:])
 	case "copart sales-data":
 		runCopartSalesData(ctx, os.Args[3:])
+	case "copart todays-auctions":
+		runCopartTodaysAuctions(ctx, os.Args[3:])
 	case "copart from-url":
 		runCopartFromURL(ctx, os.Args[3:])
 	case "copart detail":
@@ -678,6 +680,118 @@ func runCopartAnalyze(_ context.Context, args []string) {
 	enc.SetIndent("", "  ")
 	enc.Encode(results)
 	fmt.Fprintf(os.Stderr, "wrote %d analyzed lots to %s\n", len(results), *outFile)
+}
+
+// ── copart todays-auctions ────────────────────────────────────────────────────
+// Fetches Copart's /public/data/todaysAuctions — the authoritative schedule of EVERY
+// lane running today (live + later) — from inside the logged-in browser (Incapsula
+// blocks it from a bare/rotating request). One row per lane: yard, sale, lane, start
+// time, lot count. The full directory the watcher needs to cover every lane.
+
+type caSale struct {
+	YardName    string `json:"yardName"`
+	SaleName    string `json:"saleName"`
+	Lane        string `json:"lane"`
+	YardNumber  int    `json:"yardNumber"`
+	JoinAtUTC   string `json:"auctionDateTimeInUTC"`
+	AuctionDate struct {
+		DateAsInt int `json:"dateAsInt"`
+	} `json:"auctionDate"`
+	TotalItems int `json:"totalItems"`
+}
+
+type caTodaysAuctions struct {
+	Data struct {
+		SaleList struct {
+			LiveSales  []caSale `json:"liveSales"`
+			LaterSales []caSale `json:"laterSales"`
+		} `json:"saleList"`
+	} `json:"data"`
+}
+
+type auctionRow struct {
+	SaleID     string `json:"sale_id"` // "{yardNumber}-{lane}"
+	YardName   string `json:"yard_name"`
+	YardNumber int    `json:"yard_number"`
+	SaleName   string `json:"sale_name"`
+	Lane       string `json:"lane"`
+	JoinAtUTC  string `json:"join_at_utc"`
+	DateAsInt  int    `json:"date_as_int"`
+	TotalItems int    `json:"total_items"`
+	Status     string `json:"status"` // live | later
+}
+
+func runCopartTodaysAuctions(ctx context.Context, args []string) {
+	fs := flag.NewFlagSet("copart todays-auctions", flag.ExitOnError)
+	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
+	outFile := fs.String("out", "", "write JSON to file (default stdout)")
+	proxy := fs.String("proxy", "", "residential proxy (default $SALESHISTORY_PROXY)")
+	fs.Parse(args)
+	if *proxy == "" {
+		*proxy = os.Getenv("SALESHISTORY_PROXY")
+	}
+
+	br, err := browser.New(browser.Options{
+		Headless: true,
+		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+			"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+		ProxyURL: *proxy,
+	})
+	if err != nil {
+		fatal("launch browser", err)
+	}
+	defer br.Close()
+
+	sc := copart.New(br, os.Getenv("COPART_EMAIL"), os.Getenv("COPART_PASSWORD"), *cookiePath)
+	if err := sc.LoadSession(ctx); err != nil {
+		fatal("load session", err)
+	}
+
+	page, err := br.NewPage("https://www.copart.com/auctionDashboard")
+	if err != nil {
+		fatal("navigate auctionDashboard", err)
+	}
+	_ = page.Timeout(25 * time.Second).WaitLoad()
+	time.Sleep(2500 * time.Millisecond) // SPA settle / Incapsula clear
+
+	res, err := page.Eval(`async () => {
+		const r = await fetch('/public/data/todaysAuctions', { headers: { 'Accept': 'application/json' } });
+		return await r.text();
+	}`)
+	if err != nil {
+		fatal("fetch todaysAuctions", err)
+	}
+	text := res.Value.Str()
+	var ta caTodaysAuctions
+	if err := json.Unmarshal([]byte(text), &ta); err != nil {
+		fatal(fmt.Sprintf("decode todaysAuctions (%d bytes — dead session / Incapsula?)", len(text)), err)
+	}
+
+	var rows []auctionRow
+	add := func(sales []caSale, status string) {
+		for _, s := range sales {
+			rows = append(rows, auctionRow{
+				SaleID: fmt.Sprintf("%d-%s", s.YardNumber, s.Lane),
+				YardName: s.YardName, YardNumber: s.YardNumber,
+				SaleName: s.SaleName, Lane: s.Lane,
+				JoinAtUTC: s.JoinAtUTC, DateAsInt: s.AuctionDate.DateAsInt,
+				TotalItems: s.TotalItems, Status: status,
+			})
+		}
+	}
+	add(ta.Data.SaleList.LiveSales, "live")
+	add(ta.Data.SaleList.LaterSales, "later")
+
+	out, _ := json.MarshalIndent(rows, "", "  ")
+	if *outFile != "" {
+		if err := os.WriteFile(*outFile, out, 0o644); err != nil {
+			fatal("write out", err)
+		}
+		fmt.Fprintf(os.Stderr, "wrote %d auctions (%d live / %d later) to %s\n",
+			len(rows), len(ta.Data.SaleList.LiveSales), len(ta.Data.SaleList.LaterSales), *outFile)
+	} else {
+		fmt.Println(string(out))
+	}
 }
 
 // pyValue fetches the canonical private-party value from the autoarb value machine
