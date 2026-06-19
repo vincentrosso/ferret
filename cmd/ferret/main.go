@@ -810,12 +810,13 @@ func runCopartProbeNet(ctx context.Context, args []string) {
 	proxy := fs.String("proxy", "", "residential proxy (default $SALESHISTORY_PROXY)")
 	matchRe := fs.String("match", `data/|auction|[Tt]oken|[Cc]hannel|solace|[Cc]luster|[Bb]uyer`, "regex of URLs to dump")
 	wait := fs.Int("wait", 12, "seconds to keep capturing after the join nav")
+	urlFlag := fs.String("url", "", "navigate directly to this URL (overrides -sale; for hitting the g2 iframe app)")
 	fs.Parse(args)
 	if *proxy == "" {
 		*proxy = os.Getenv("SALESHISTORY_PROXY")
 	}
-	if *saleArg == "" {
-		fatal("need -sale", fmt.Errorf("e.g. -sale 98-A"))
+	if *saleArg == "" && *urlFlag == "" {
+		fatal("need -sale or -url", fmt.Errorf("e.g. -sale 98-A"))
 	}
 
 	br, err := browser.New(browser.Options{
@@ -877,13 +878,26 @@ func runCopartProbeNet(ctx context.Context, args []string) {
 		},
 	)()
 
-	saleURL := "https://www.copart.com/auctionDashboard?auctionDetails=" + url.QueryEscape(*saleArg)
-	fmt.Fprintf(os.Stderr, "joining %s …\n", saleURL)
-	if err := page.Navigate(saleURL); err != nil {
+	navTo := *urlFlag
+	if navTo == "" {
+		navTo = "https://www.copart.com/auctionDashboard?auctionDetails=" + url.QueryEscape(*saleArg)
+	}
+	fmt.Fprintf(os.Stderr, "navigating %s …\n", navTo)
+	if err := page.Navigate(navTo); err != nil {
 		fatal("navigate", err)
 	}
 	_ = page.Timeout(30 * time.Second).WaitLoad()
 	time.Sleep(time.Duration(*wait) * time.Second)
+
+	// Dump iframe srcs — the g2auction auction app loads in one; re-run with -url <src>
+	// to capture ITS network (OOPIF requests aren't on this target).
+	if els, err := page.Elements("iframe"); err == nil {
+		for _, el := range els {
+			if src, _ := el.Attribute("src"); src != nil && *src != "" {
+				fmt.Printf("\n[iframe src] %s\n", *src)
+			}
+		}
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
