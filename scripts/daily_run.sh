@@ -49,6 +49,14 @@ echo "--- 1c enrich TODAY's sales-data auctions → deals auto-watch (blocking) 
 $PYTHON "$AUTOARB_DIR/salesdata_enrich.py" --file "$DIR/lots-salesdata.json" \
   || echo "  (sales-data enrich soft-failed — continuing)"
 
+echo "--- 1d today's auction directory (EVERY lane: /public/data/todaysAuctions) ---"
+# Authoritative list of every sale running today (live + later) → todays_auctions.
+# The watch-coverage feed so the fleet stops missing lanes.
+/opt/ferret/ferret copart todays-auctions -cookies /opt/ferret/data/copart-session.json \
+  -out "$DIR/todays-auctions.json" \
+  && $PYTHON "$AUTOARB_DIR/ingest_auctions.py" --file "$DIR/todays-auctions.json" \
+  || echo "  (todays-auctions soft-failed — continuing)"
+
 echo "--- 2/4 details + images ---"
 $RUN ferret_copart_detail
 
