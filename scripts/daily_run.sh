@@ -92,4 +92,14 @@ for f in reports/*.html; do
 done
 echo 'reports published to web root (app index.html preserved)'
 
+echo "--- 6/6 enrich UPCOMING deals (future days) → verdicts + values + watches ---"
+# Runs LAST (after the report, so it isn't delayed): enrich every upcoming-day deal
+# in the sales-data dump so each carries a verdict/value (and future-day watches get
+# flagged for the fleet). Today's deals were already done in step 1c; this is the
+# rest. Already-enriched lots are skipped server-side (ENRICH_TTL_HOURS) so re-runs
+# only do new/stale work. Blocking + last → never overlaps another enrich.
+$PYTHON "$AUTOARB_DIR/salesdata_enrich.py" --file "$DIR/lots-salesdata.json" \
+    --future-only --through-days 14 --max 2000 --timeout-min 360 \
+    || echo "  (upcoming-deals enrich soft-failed — continuing)"
+
 echo "=== done $(date +%H:%M:%S) ==="
