@@ -256,28 +256,10 @@ a { text-decoration: none; color: inherit; }
   .row { grid-template-columns: 48px 36px 1fr; }
   .actions { display: none; }
 }
-.aa-nav{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:0 0 10px;margin-bottom:16px;border-bottom:1px solid #25344d}
-.aa-nav .aa-home{font-size:.82rem;font-weight:700;color:#cbd5e1;text-decoration:none}
-.aa-nav .aa-links{margin-left:auto;display:flex;gap:14px;flex-wrap:wrap}
-.aa-nav .aa-links a{font-size:.74rem;color:#94a3b8;text-decoration:none}
-.aa-nav .aa-links a:hover{color:#e2e8f0}
-.aa-nav .aa-links a.on{color:#60a5fa;font-weight:700}
 </style>
 </head>
 <body>
-<nav class="aa-nav">
-  <a class="aa-home" href="/">AutoArb</a>
-  <span class="aa-links">
-    <a href="/check.html">URL search</a>
-    <a href="/lookup.html">Lookup</a>
-    <a href="/day.html">Day view</a>
-    <a href="/sales-history.html">Sales history</a>
-    <a class="on" href="/upcoming.html">Upcoming</a>
-    <a href="/watches.html">Watches</a>
-    <a href="/captures.html">Captured</a>
-    <a href="/captures-status.html">Capture status</a>
-  </span>
-</nav>
+<script src="/nav.js"></script>
 <div class="hdr">
   <h1>Best Deals by Sale Day</h1>
   <div class="sub">{{.Generated}} &nbsp;·&nbsp; {{.Total}} deals to watch &amp; bid &nbsp;·&nbsp;
