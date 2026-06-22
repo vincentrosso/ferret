@@ -42,6 +42,13 @@ $RUN ferret_copart_sales_data \
   && $PYTHON "$AUTOARB_DIR/ingest_salesdata.py" --file "$DIR/lots-salesdata.json" \
   || echo "  (sales-data step soft-failed — continuing)"
 
+echo "--- 1b' full sales-data CSV → sales_history (universal spec record, all yards) ---"
+# Layer (a) of record-all-auctions: every lot in every sale (~142k rows, not
+# hail-filtered) into sales_history, the repo-of-everything. Free (CSV already pulled
+# above), additive, ~22s. Realized hammers stay in `hammers`, joined on ltrim.
+$PYTHON "$AUTOARB_DIR/ingest_sales_history.py" --csv "$DIR/data/copart-salesdata.csv" \
+  || echo "  (sales_history ingest soft-failed — continuing)"
+
 echo "--- 1c enrich TODAY's sales-data auctions → deals auto-watch (blocking) ---"
 # Today-only (watches resolve sale-day only). Full enrich → server auto-watches
 # the BID/WATCH deals for the fleet. Blocks so it never overlaps the detail step
