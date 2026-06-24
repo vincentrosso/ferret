@@ -536,16 +536,34 @@ func domValue(page *rod.Page, keys ...string) string {
 		tl := strings.ToLower(strings.TrimSpace(text))
 		for _, k := range keys {
 			if strings.Contains(tl, k) {
-				// Try following sibling first
-				if sib, err := el.ElementX(`following-sibling::*[1]`); err == nil {
-					if v, err := sib.Text(); err == nil && strings.TrimSpace(v) != "" {
-						return strings.TrimSpace(v)
+				// Extract the value robustly. A following-sibling value covers the
+				// vertical dt/dd and label+value layouts. But on a HORIZONTAL spec
+				// table the matched cell is a header (<th>Model</th>) whose next
+				// sibling is the NEXT header (<th>Trim</th>) — the old code returned
+				// that, so model came back as the literal "Trim" and KBB lookups
+				// failed. So: take a following-sibling only if it isn't itself a
+				// header, else drop to the next row's cell at the same column index
+				// (thead/tbody-safe via the table's full row list).
+				v, err := el.Eval(`() => {
+					const isHdr = n => n && (n.tagName === 'TH' || n.tagName === 'DT');
+					const sib = this.nextElementSibling;
+					if (sib && !isHdr(sib)) { const t = (sib.textContent || '').trim(); if (t) return t; }
+					const row = this.closest && this.closest('tr');
+					const table = this.closest && this.closest('table');
+					if (row && table && this.parentElement) {
+						const idx = Array.prototype.indexOf.call(this.parentElement.children, this);
+						const rows = Array.prototype.slice.call(table.querySelectorAll('tr'));
+						const ri = rows.indexOf(row);
+						if (ri >= 0 && ri + 1 < rows.length) {
+							const cell = rows[ri + 1].children[idx];
+							if (cell) { const t = (cell.textContent || '').trim(); if (t) return t; }
+						}
 					}
-				}
-				// Try parent's next td
-				if td, err := el.ElementX(`../td`); err == nil {
-					if v, err := td.Text(); err == nil && strings.TrimSpace(v) != "" {
-						return strings.TrimSpace(v)
+					return '';
+				}`)
+				if err == nil {
+					if s := strings.TrimSpace(v.Value.Str()); s != "" {
+						return s
 					}
 				}
 			}
