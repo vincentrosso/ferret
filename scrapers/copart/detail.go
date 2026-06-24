@@ -436,13 +436,21 @@ func clickDownloadImages(br *rod.Browser, page *rod.Page, dir, lotNumber string)
 	if err != nil {
 		return "", fmt.Errorf("download button not found: %w", err)
 	}
+	// Detach the button from the 10s find-deadline above. Otherwise the scroll +
+	// click below inherit whatever is left of those 10s, and on a slow Incapsula
+	// render the click fires with the budget already spent — which surfaces as
+	// "click download button: context deadline exceeded" (12-16 lots/day). Each
+	// operation below gets its own fresh timeout instead.
+	btn = btn.CancelTimeout()
 
-	// Scroll the button into view first
-	btn.MustScrollIntoView()
+	// Scroll the button into view first (non-fatal — try the click regardless)
+	if err := btn.Timeout(10 * time.Second).ScrollIntoView(); err != nil {
+		slog.Debug("scroll download button into view failed", "lot", lotNumber, "err", err)
+	}
 	time.Sleep(300 * time.Millisecond)
 
 	// First click — may open an overlay/dropdown with options
-	if err := btn.Click(proto.InputMouseButtonLeft, 1); err != nil {
+	if err := btn.Timeout(15 * time.Second).Click(proto.InputMouseButtonLeft, 1); err != nil {
 		return "", fmt.Errorf("click download button: %w", err)
 	}
 	time.Sleep(800 * time.Millisecond)
