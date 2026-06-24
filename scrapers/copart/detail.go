@@ -545,9 +545,31 @@ func domValue(page *rod.Page, keys ...string) string {
 				// header, else drop to the next row's cell at the same column index
 				// (thead/tbody-safe via the table's full row list).
 				v, err := el.Eval(`() => {
+					const hdr = (this.textContent || '').trim();
+					// Clean a candidate node's text: drop label-ish child elements, and
+					// strip a leading echo of the field label that responsive tables glue
+					// into the value cell (e.g. "MODELExplorer" -> "Explorer"). The echo
+					// strip is letter-counted so a real "Model 3" survives.
+					const clean = (node) => {
+						if (!node) return '';
+						const c = node.cloneNode(true);
+						c.querySelectorAll('th, label, [class*="label" i], [class*="key" i], [class*="field-name" i]').forEach(n => n.remove());
+						let t = (c.textContent || '').replace(/\s+/g, ' ').trim();
+						const norm = s => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+						const h = norm(hdr);
+						if (h && norm(t) !== h && norm(t).startsWith(h)) {
+							let i = 0, seen = 0;
+							while (i < t.length && seen < h.length) {
+								if (/[A-Za-z0-9]/.test(t[i])) seen++;
+								i++;
+							}
+							t = t.slice(i).trim();
+						}
+						return t;
+					};
 					const isHdr = n => n && (n.tagName === 'TH' || n.tagName === 'DT');
 					const sib = this.nextElementSibling;
-					if (sib && !isHdr(sib)) { const t = (sib.textContent || '').trim(); if (t) return t; }
+					if (sib && !isHdr(sib)) { const t = clean(sib); if (t) return t; }
 					const row = this.closest && this.closest('tr');
 					const table = this.closest && this.closest('table');
 					if (row && table && this.parentElement) {
@@ -556,7 +578,7 @@ func domValue(page *rod.Page, keys ...string) string {
 						const ri = rows.indexOf(row);
 						if (ri >= 0 && ri + 1 < rows.length) {
 							const cell = rows[ri + 1].children[idx];
-							if (cell) { const t = (cell.textContent || '').trim(); if (t) return t; }
+							const t = clean(cell); if (t) return t;
 						}
 					}
 					return '';
