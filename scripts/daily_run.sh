@@ -109,4 +109,11 @@ $PYTHON "$AUTOARB_DIR/salesdata_enrich.py" --file "$DIR/lots-salesdata.json" \
     --future-only --through-days 14 --max 2000 --timeout-min 360 \
     || echo "  (upcoming-deals enrich soft-failed — continuing)"
 
+echo "--- refresh hammer_machine_value (captures deals-board values, from the machine) ---"
+# Materialize the vehicle_value-machine value per captured (sold) lot so the
+# captures.html "deals" board ranks by the machine's coverage, not the sparse
+# valuations table. Local lookups, runs in seconds. Picks up the day's new captures.
+$PYTHON "$AUTOARB_DIR/build_hammer_values.py" \
+    || echo "  (hammer-value refresh soft-failed — continuing)"
+
 echo "=== done $(date +%H:%M:%S) ==="
