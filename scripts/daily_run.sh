@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Full daily pipeline: search → detail → analyze → value → report
-# Runs at 5am PDT via cron on the Hetzner server.
+# Full daily pipeline: search → detail → analyze → value → report → enrich upcoming
+# → pre-sale vision → refresh machine values.
+# Runs at 1am PT via cron (NOT 5am — that comment was stale). The cron fires at
+# 08:00/09:00 UTC gated to "PT hour == 01" because this box ignores CRON_TZ; DST-proof
+# (PDT@08, PST@09). 1am so step 1c enriches the right sale-day and it finishes before
+# the 6am scaler-plan + 7am peak.
 set -euo pipefail
 
 # Group-writable output so the www-data web service (lookup "Analyze", etc.)
