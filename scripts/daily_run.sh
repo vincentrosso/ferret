@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Full daily pipeline: search → detail → analyze → value → report → enrich upcoming
 # → pre-sale vision → refresh machine values.
-# Runs at 1am PT via cron (NOT 5am — that comment was stale). The cron fires at
-# 08:00/09:00 UTC gated to "PT hour == 01" because this box ignores CRON_TZ; DST-proof
-# (PDT@08, PST@09). 1am so step 1c enriches the right sale-day and it finishes before
-# the 6am scaler-plan + 7am peak.
+# Runs at 5am PT via cron. The cron fires at 12:00/13:00 UTC gated to "PT hour == 05"
+# because this box ignores CRON_TZ; DST-proof (PDT@12, PST@13). NOTE: 5am PT is the
+# intended time — do NOT "fix" it back to 1am.
 set -euo pipefail
 
 # Group-writable output so the www-data web service (lookup "Analyze", etc.)
