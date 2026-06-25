@@ -109,6 +109,16 @@ $PYTHON "$AUTOARB_DIR/salesdata_enrich.py" --file "$DIR/lots-salesdata.json" \
     --future-only --through-days 14 --max 2000 --timeout-min 360 \
     || echo "  (upcoming-deals enrich soft-failed — continuing)"
 
+echo "--- 6b pre-sale VISION on the top upcoming deals (real repair before the hammer) ---"
+# The upcoming enrich above runs vision OFF (default repair $1800), which can flatter
+# a heavily-damaged lot (the after-the-fact F-250/Colorado lesson). Run the AI-box
+# damage read on the top-N upcoming candidates so their margins rest on a MEASURED
+# repair before the sale. Idempotent (reuses each lot's existing vision read), and
+# vision is serialized server-side, so it only measures NEW candidates each day.
+$PYTHON "$AUTOARB_DIR/vision_pass.py" --min "${VISION_MIN:-1000}" --max "${VISION_MAX:-25000}" \
+    --n "${VISION_N:-15}" --days "${VISION_DAYS:-5}" --timeout-min 120 \
+    || echo "  (pre-sale vision pass soft-failed — continuing)"
+
 echo "--- refresh hammer_machine_value (captures deals-board values, from the machine) ---"
 # Materialize the vehicle_value-machine value per captured (sold) lot so the
 # captures.html "deals" board ranks by the machine's coverage, not the sparse
