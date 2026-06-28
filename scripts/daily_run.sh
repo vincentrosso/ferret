@@ -129,4 +129,10 @@ echo "--- refresh hammer_machine_value (captures deals-board values, from the ma
 $PYTHON "$AUTOARB_DIR/build_hammer_values.py" \
     || echo "  (hammer-value refresh soft-failed — continuing)"
 
+echo "--- warm page caches (so the morning's first page loads are instant w/ fresh data) ---"
+# /api/warm pre-computes every cached default view (buys/upcoming/day/captures-deals/
+# backtest) in the background — fire-and-forget, completes in ~30s.
+curl -s --max-time 30 "http://localhost:8000/api/warm" >/dev/null \
+    && echo "  (cache warm triggered)" || echo "  (cache warm soft-failed)"
+
 echo "=== done $(date +%H:%M:%S) ==="
