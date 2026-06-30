@@ -152,17 +152,28 @@ func fetchKBBBody(pageURL, proxyURL string, step time.Duration) (body string, no
 		return "", true, nil
 	}
 	if !strings.Contains(text, "Private Party Value") && !strings.Contains(text, "Trade-In Value") {
+		// No value table. TWO very different causes — don't conflate them:
+		//   (a) blank/challenge render (slow or challenged IP) → retrying on a fresh
+		//       IP is worth it. Signature: little text, or a verify/robot wall.
+		//   (b) a fully-rendered REAL KBB page that just isn't a value page — almost
+		//       always the wrong slug landing on the "Car Finder" model picker (e.g.
+		//       "grand" instead of "grand-cherokee"). Retrying burns the whole 52s
+		//       budget on a dead slug and starves the correct candidate. Bail to the
+		//       NEXT slug candidate immediately (notFound semantics).
+		low := strings.ToLower(text)
+		blankOrChallenge := len(text) < 2000 ||
+			strings.Contains(low, "verify you are") || strings.Contains(low, "are you a human") ||
+			strings.Contains(low, "access denied") || strings.Contains(low, "unusual traffic") ||
+			strings.Contains(low, "pardon our interruption")
 		if os.Getenv("KBB_DEBUG") != "" {
 			title, _ := page.Eval(`() => document.title`)
-			hrefs, _ := page.Eval(`() => [...document.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).filter(h=>h && /\/20\d\d\//.test(h)).slice(0,25)`)
-			low := strings.ToLower(text)
-			fmt.Fprintf(os.Stderr, "[KBB_DEBUG] %s\n  title=%v\n  len(text)=%d challenged=%v styles_word=%v\n  yearlinks=%v\n",
-				pageURL, title.Value, len(text),
-				strings.Contains(low, "verify") || strings.Contains(low, "robot") || strings.Contains(low, "denied"),
-				strings.Contains(low, "select your") || strings.Contains(low, "choose a style") || strings.Contains(low, "style"),
-				hrefs.Value)
+			fmt.Fprintf(os.Stderr, "[KBB_DEBUG] %s title=%v len=%d challenge=%v\n",
+				pageURL, title.Value, len(text), blankOrChallenge)
 		}
-		return "", false, nil // challenged/slow IP — no table; caller retries
+		if blankOrChallenge {
+			return "", false, nil // retry on a fresh IP
+		}
+		return "", true, nil // rendered, but wrong slug / picker page — try next candidate
 	}
 	return text, false, nil
 }
