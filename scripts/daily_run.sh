@@ -118,8 +118,13 @@ echo "--- 6b pre-sale VISION on the top upcoming deals (real repair before the h
 # damage read on the top-N upcoming candidates so their margins rest on a MEASURED
 # repair before the sale. Idempotent (reuses each lot's existing vision read), and
 # vision is serialized server-side, so it only measures NEW candidates each day.
+# N covers the actionable BID cohort (~50 deals), not just the top 15 — the top-20
+# yesterday-test (2026-06-30) showed the est repair lies on ~25% of cosmetic-labeled
+# lots (collision hiding behind a "minor dent" label), so leaving 2/3 of the board on
+# the prior shipped bad margins. Idempotency keeps the steady-state cost to the day's
+# NEW deals only; the 120-min timeout fits a ~50-lot cold start on the CPU AI box.
 $PYTHON "$AUTOARB_DIR/vision_pass.py" --min "${VISION_MIN:-1000}" --max "${VISION_MAX:-25000}" \
-    --n "${VISION_N:-15}" --days "${VISION_DAYS:-5}" --timeout-min 120 \
+    --n "${VISION_N:-60}" --days "${VISION_DAYS:-7}" --timeout-min 180 \
     || echo "  (pre-sale vision pass soft-failed — continuing)"
 
 echo "--- refresh hammer_machine_value (captures deals-board values, from the machine) ---"
