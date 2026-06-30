@@ -56,6 +56,7 @@ type DetailResult struct {
 	YardName           string       `json:"yard_name,omitempty"`
 	IsBIN              bool         `json:"is_bin,omitempty"`
 	BuyNowAmount       float64      `json:"buy_now_amount,omitempty"`
+	BidEligibility     string       `json:"bid_eligibility,omitempty"` // "Can bid" / "Can't bid" — Copart's Eligibility panel
 	ScrapedAt          time.Time    `json:"scraped_at"`
 }
 
@@ -93,6 +94,11 @@ var (
 	reBIN          = regexp.MustCompile(`(?i)buy\s*(?:it\s*)?now`)
 	reBINAmount    = regexp.MustCompile(`(?i)buy\s*(?:it\s*)?now[:\s$]*([\d,]+)`)
 	reCurrentBid   = regexp.MustCompile(`(?i)Current\s*Bid[:\s$]*([\d,]+)`)
+	// Copart's "Eligibility" panel reads "Can't bid" / "Check why?" when the
+	// account can't bid on the lot (license/region/deposit gates), or shows a
+	// positive "You're eligible to bid" / "Bid now" affordance when it can.
+	reCantBid      = regexp.MustCompile(`(?i)can'?t\s+bid|not\s+eligible|ineligible\s+to\s+bid`)
+	reCanBid       = regexp.MustCompile(`(?i)eligible\s+to\s+bid|you\s+can\s+bid`)
 	reSoldFor      = regexp.MustCompile(`(?i)Sold\s+for\s*\$?\s*([\d,]+)`)
 	reOdoDetail    = regexp.MustCompile(`(?i)(?:Odometer|Miles|Mileage)[:\s]*([\d,]+)`)
 	reExteriorSect = regexp.MustCompile(`(?is)Exterior\s+condition\s*\n(.*?)(?:\nFront\s+(?:left|right)|\nInterior|\nNote:|\nFull\s+vehicle|\z)`)
@@ -287,6 +293,25 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 	if m := reOdoDetail.FindStringSubmatch(bodyText); len(m) >= 2 {
 		if n, err := strconv.Atoi(strings.ReplaceAll(m[1], ",", "")); err == nil {
 			res.Odometer = n
+		}
+	}
+
+	// Bid eligibility — Copart's "Eligibility: Can't bid / Check why?" panel.
+	// Prefer the labeled DOM value, then fall back to scanning the body text.
+	// "Can't bid" wins ties (it's the gate we actually care about flagging).
+	if elig := domValue(page, "eligibility", "bid eligibility"); elig != "" {
+		el := strings.ToLower(elig)
+		if reCantBid.MatchString(el) {
+			res.BidEligibility = "Can't bid"
+		} else if reCanBid.MatchString(el) {
+			res.BidEligibility = "Can bid"
+		}
+	}
+	if res.BidEligibility == "" {
+		if reCantBid.MatchString(bodyText) {
+			res.BidEligibility = "Can't bid"
+		} else if reCanBid.MatchString(bodyText) {
+			res.BidEligibility = "Can bid"
 		}
 	}
 
