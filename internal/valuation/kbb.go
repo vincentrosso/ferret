@@ -2,6 +2,7 @@ package valuation
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -151,6 +152,16 @@ func fetchKBBBody(pageURL, proxyURL string, step time.Duration) (body string, no
 		return "", true, nil
 	}
 	if !strings.Contains(text, "Private Party Value") && !strings.Contains(text, "Trade-In Value") {
+		if os.Getenv("KBB_DEBUG") != "" {
+			title, _ := page.Eval(`() => document.title`)
+			hrefs, _ := page.Eval(`() => [...document.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).filter(h=>h && /\/20\d\d\//.test(h)).slice(0,25)`)
+			low := strings.ToLower(text)
+			fmt.Fprintf(os.Stderr, "[KBB_DEBUG] %s\n  title=%v\n  len(text)=%d challenged=%v styles_word=%v\n  yearlinks=%v\n",
+				pageURL, title.Value, len(text),
+				strings.Contains(low, "verify") || strings.Contains(low, "robot") || strings.Contains(low, "denied"),
+				strings.Contains(low, "select your") || strings.Contains(low, "choose a style") || strings.Contains(low, "style"),
+				hrefs.Value)
+		}
 		return "", false, nil // challenged/slow IP — no table; caller retries
 	}
 	return text, false, nil
