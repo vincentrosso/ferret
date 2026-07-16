@@ -79,10 +79,13 @@ func (s *Scraper) Login(ctx context.Context) error {
 	}
 	time.Sleep(300 * time.Millisecond)
 
-	// Submit button inside copart-signin component
-	submitEl, err := page.Element(`copart-signin > div > div button`)
+	// The credentials submit — must be pinned by class. Copart renders "Sign in with
+	// Google"/"Apple" ABOVE the form inside the same copart-signin block, and every one
+	// of them is type=submit with no id/data-uname. A positional or type-based selector
+	// grabs Google first and silently federates the login away.
+	submitEl, err := page.Element(`copart-signin button.sign-in-button`)
 	if err != nil {
-		submitEl, err = page.Element(`button[type="submit"]`)
+		submitEl, err = page.Element(`button.sign-in-button`)
 		if err != nil {
 			return fmt.Errorf("submit button not found: %w", err)
 		}
@@ -92,19 +95,30 @@ func (s *Scraper) Login(ctx context.Context) error {
 	if err := submitEl.Click(proto.InputMouseButtonLeft, 1); err != nil {
 		return fmt.Errorf("click submit: %w", err)
 	}
-	// Copart login is an Angular SPA submit — the route change lags the click and
-	// isn't a full navigation, so poll the URL rather than WaitNavigation.
+	// Copart login is an Angular SPA submit — the route change lags the click and isn't a
+	// full navigation, so poll. The authoritative signal is the SESSION COOKIE, never the
+	// URL: leaving /login only proves we went somewhere. A federated click lands on
+	// accounts.google.com, whose URL carries no literal "/login" (it's %2Flogin inside
+	// redirect_uri), so a URL check scores that as success and saves a logged-out session
+	// — which is exactly how this reported "re-login OK" while the fleet captured nothing.
+	// g2app.logged-in-member-name is the same cookie the watcher's loggedIn() gates on.
 	finalURL := ""
-	for i := 0; i < 25; i++ {
+	authed := false
+	for i := 0; i < 25 && !authed; i++ {
 		time.Sleep(1 * time.Second)
 		if info, e := page.Info(); e == nil {
 			finalURL = info.URL
-			if !strings.Contains(finalURL, "/login") {
-				break
+		}
+		if res, e := (proto.StorageGetCookies{}).Call(page); e == nil {
+			for _, c := range res.Cookies {
+				if c.Name == "g2app.logged-in-member-name" && c.Value != "" {
+					authed = true
+					break
+				}
 			}
 		}
 	}
-	if strings.Contains(finalURL, "/login") {
+	if !authed {
 		errMsg := ""
 		if el, e := page.Timeout(2 * time.Second).Element(`.error, .alert, [class*="error"], [class*="invalid"], copart-signin .text-danger`); e == nil {
 			if t, e2 := el.Text(); e2 == nil {
@@ -115,8 +129,13 @@ func (s *Scraper) Login(ctx context.Context) error {
 		if _, e := page.Timeout(2 * time.Second).Element(`iframe[src*="captcha"], iframe[src*="recaptcha"], [class*="captcha"], #px-captcha`); e == nil {
 			captcha = true
 		}
-		slog.Warn("login did not leave /login", "errMsg", errMsg, "captcha", captcha, "url", finalURL)
-		return fmt.Errorf("login failed: still on login page (%s)", finalURL)
+		federated := !strings.Contains(finalURL, "copart.com")
+		slog.Warn("login did not authenticate",
+			"errMsg", errMsg, "captcha", captcha, "federated", federated, "url", finalURL)
+		if federated {
+			return fmt.Errorf("login failed: federated away to %s — the credentials submit was not clicked", finalURL)
+		}
+		return fmt.Errorf("login failed: no session cookie (%s)", finalURL)
 	}
 	slog.Info("login succeeded", "url", finalURL)
 
