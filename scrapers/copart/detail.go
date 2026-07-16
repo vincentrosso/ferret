@@ -166,6 +166,21 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 	// Give Angular time to render newly-visible sections
 	time.Sleep(500 * time.Millisecond)
 
+	// The account-specific "Eligibility" panel ("Can't bid / Check why?" vs the biddable
+	// affordance) renders ASYNC — later than the detail panel, and later still behind a
+	// slow proxy hop. A plain bodyText snapshot races it, so it intermittently misses
+	// "Can't bid" and leaves eligibility NULL — which downstream wrongly reads as biddable
+	// (a can't-bid lot shown as a buy). Poll up to ~8s for the eligibility text to appear
+	// before we snapshot; break the instant it's there so biddable lots don't pay the wait.
+	for i := 0; i < 16; i++ {
+		r, err := page.Eval(`() => { var t=(document.body.innerText||'').toLowerCase();
+			return /can'?t\s+bid|check\s+why|not\s+eligible|ineligible|eligible\s+to\s+bid|you\s+can\s+bid/.test(t); }`)
+		if err == nil && r.Value.Bool() {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
 	bodyEl, err := page.Timeout(20 * time.Second).Element("body")
 	if err != nil {
 		return nil, fmt.Errorf("page body not found (slow/blocked load): %w", err)
