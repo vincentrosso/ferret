@@ -39,16 +39,29 @@ if ./ferret copart check -proxy "$PROXY" 2>/dev/null | grep -q "session is valid
   exit 0
 fi
 
+# Two attempts, long cooldown — NOT three short ones. On a grouchy-Incapsula day
+# (2026-07-21: 8/17 hourly re-logins failed on attempt 1) the 3x100s shape was the
+# worst of both worlds: it knocked three times inside five minutes — which is the
+# burst pattern that walls us — then gave up and went dark for the rest of the hour.
+# Nearly every recovery in the log is "attempt 1 fails, attempt 2 succeeds ~2.5min
+# later", so it's the COOLDOWN doing the work, not the attempt count. Fewer knocks,
+# spaced further apart. Worst case here is ~13 min, still well inside the hourly cron.
+ATTEMPTS=2
+COOLDOWN=300
 say "session expired — attempting re-login"
-for attempt in 1 2 3; do
+for attempt in $(seq 1 $ATTEMPTS); do
   timeout 230 ./ferret copart login -headless -proxy "$PROXY" >/dev/null 2>&1
   fix_session_perms
   if ./ferret copart check -proxy "$PROXY" 2>/dev/null | grep -q "session is valid"; then
     say "re-login OK (attempt $attempt)"
     exit 0
   fi
-  say "re-login attempt $attempt failed — cooldown 100s (Incapsula?)"
-  sleep 100
+  if [ "$attempt" -lt "$ATTEMPTS" ]; then
+    say "re-login attempt $attempt failed — cooldown ${COOLDOWN}s (Incapsula?)"
+    sleep "$COOLDOWN"
+  else
+    say "re-login attempt $attempt failed"
+  fi
 done
-say "re-login FAILED after 3 attempts — will retry next cron"
+say "re-login FAILED after $ATTEMPTS attempts — will retry next cron"
 exit 1
