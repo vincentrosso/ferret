@@ -70,19 +70,19 @@ type DamageItem struct {
 // ── compiled regexes ──────────────────────────────────────────────────────
 
 var (
-	reVIN          = regexp.MustCompile(`(?i)VIN[:\s]+([A-HJ-NPR-Z0-9]{17})`)
-	reGrade        = regexp.MustCompile(`(?i)(?:Condition\s+)?Grade[:\s]*([\d.]+)`)
-	reRunDrive     = regexp.MustCompile(`(?i)Run\s*and\s*Drive[:\s]*(Yes|No)`)
-	reHighlights   = regexp.MustCompile(`(?is)Highlights:\s*(.*?)\s*\nNotes:`)
-	reRunsDrives   = regexp.MustCompile(`(?i)\bRuns?\s+and\s+Drives?\b`)
-	reTitleCode    = regexp.MustCompile(`(?is)Title code:\s*(.*?)\s*\n\s*Odometer`)
-	reOdoBrand     = regexp.MustCompile(`(?is)Odometer:\s*[\d,]+\s*mi\s*\n\s*(Not Actual[A-Za-z ]*|Exceeds Mechanical[A-Za-z ]*|Exempt|Actual)`)
-	reDriveType    = regexp.MustCompile(`(?i)\b(FWD|RWD|AWD|4WD|4x4|All[\s-]Wheel|Front[\s-]Wheel|Rear[\s-]Wheel)\b`)
-	reFuelType     = regexp.MustCompile(`(?i)Fuel[:\s]*(Gasoline|Gas|Diesel|Electric|Hybrid|Plug-in|PHEV|EV)`)
-	reLossType     = regexp.MustCompile(`(?i)Loss\s*Type[:\s]*([A-Za-z &/]+?)(?:\n|$)`)
-	reKeys         = regexp.MustCompile(`(?i)Keys?[:\s]*(Yes|No|Available|Not Available|Present|Missing)`)
-	reAirbags      = regexp.MustCompile(`(?i)Airbags?[:\s]*(Deployed|Not Deployed|Yes|No)`)
-	reSaleDate     = regexp.MustCompile(`(\d{2}/\d{2}/\d{4})`)
+	reVIN        = regexp.MustCompile(`(?i)VIN[:\s]+([A-HJ-NPR-Z0-9]{17})`)
+	reGrade      = regexp.MustCompile(`(?i)(?:Condition\s+)?Grade[:\s]*([\d.]+)`)
+	reRunDrive   = regexp.MustCompile(`(?i)Run\s*and\s*Drive[:\s]*(Yes|No)`)
+	reHighlights = regexp.MustCompile(`(?is)Highlights:\s*(.*?)\s*\nNotes:`)
+	reRunsDrives = regexp.MustCompile(`(?i)\bRuns?\s+and\s+Drives?\b`)
+	reTitleCode  = regexp.MustCompile(`(?is)Title code:\s*(.*?)\s*\n\s*Odometer`)
+	reOdoBrand   = regexp.MustCompile(`(?is)Odometer:\s*[\d,]+\s*mi\s*\n\s*(Not Actual[A-Za-z ]*|Exceeds Mechanical[A-Za-z ]*|Exempt|Actual)`)
+	reDriveType  = regexp.MustCompile(`(?i)\b(FWD|RWD|AWD|4WD|4x4|All[\s-]Wheel|Front[\s-]Wheel|Rear[\s-]Wheel)\b`)
+	reFuelType   = regexp.MustCompile(`(?i)Fuel[:\s]*(Gasoline|Gas|Diesel|Electric|Hybrid|Plug-in|PHEV|EV)`)
+	reLossType   = regexp.MustCompile(`(?i)Loss\s*Type[:\s]*([A-Za-z &/]+?)(?:\n|$)`)
+	reKeys       = regexp.MustCompile(`(?i)Keys?[:\s]*(Yes|No|Available|Not Available|Present|Missing)`)
+	reAirbags    = regexp.MustCompile(`(?i)Airbags?[:\s]*(Deployed|Not Deployed|Yes|No)`)
+	reSaleDate   = regexp.MustCompile(`(\d{2}/\d{2}/\d{4})`)
 	// Copart's labeled sale date, e.g. "Sale date: Tue. Jun 02, 2026 01:00 AM UTC"
 	reSaleDateLine = regexp.MustCompile(`(?i)sale date[:\s]+([A-Za-z]{3}\.?\s+[A-Za-z]{3}\.?\s+\d{1,2},\s+\d{4}(?:\s+\d{1,2}:\d{2}\s*(?:AM|PM)?\s*[A-Z]{0,4})?)`)
 	// Copart labels the yard "Sale name:" / "Location:" with the value on the
@@ -90,19 +90,19 @@ var (
 	// code, dash, city) both mirrors the search-side YardName the live-watch
 	// runner resolves against AND guards against grabbing the "Locations" nav
 	// menu. [:\s]+ spans the colon+newline between label and value.
-	reYardLine = regexp.MustCompile(`(?i)(?:sale name|location)[:\s]+([A-Z]{2}\s*-\s*[A-Za-z0-9 .,'/&-]+?)(?:\n|$)`)
-	reBIN          = regexp.MustCompile(`(?i)buy\s*(?:it\s*)?now`)
-	reBINAmount    = regexp.MustCompile(`(?i)buy\s*(?:it\s*)?now[:\s$]*([\d,]+)`)
-	reCurrentBid   = regexp.MustCompile(`(?i)Current\s*Bid[:\s$]*([\d,]+)`)
+	reYardLine   = regexp.MustCompile(`(?i)(?:sale name|location)[:\s]+([A-Z]{2}\s*-\s*[A-Za-z0-9 .,'/&-]+?)(?:\n|$)`)
+	reBIN        = regexp.MustCompile(`(?i)buy\s*(?:it\s*)?now`)
+	reBINAmount  = regexp.MustCompile(`(?i)buy\s*(?:it\s*)?now[:\s$]*([\d,]+)`)
+	reCurrentBid = regexp.MustCompile(`(?i)Current\s*Bid[:\s$]*([\d,]+)`)
 	// Copart's "Eligibility" panel reads "Can't bid" / "Check why?" when the
 	// account can't bid on the lot (license/region/deposit gates), or shows a
 	// positive "You're eligible to bid" / "Bid now" affordance when it can.
-	reCantBid      = regexp.MustCompile(`(?i)can'?t\s+bid|not\s+eligible|ineligible\s+to\s+bid`)
-	reCanBid       = regexp.MustCompile(`(?i)eligible\s+to\s+bid|you\s+can\s+bid`)
-	reSoldFor      = regexp.MustCompile(`(?i)Sold\s+for\s*\$?\s*([\d,]+)`)
-	reOdoDetail    = regexp.MustCompile(`(?i)(?:Odometer|Miles|Mileage)[:\s]*([\d,]+)`)
-	reExteriorSect = regexp.MustCompile(`(?is)Exterior\s+condition\s*\n(.*?)(?:\nFront\s+(?:left|right)|\nInterior|\nNote:|\nFull\s+vehicle|\z)`)
-	reDamageItem   = regexp.MustCompile(`^(.+?)\s*[-–]\s*(.+?)\s*\(([^)]+)\)\s*$`)
+	reCantBid       = regexp.MustCompile(`(?i)can'?t\s+bid|not\s+eligible|ineligible\s+to\s+bid`)
+	reCanBid        = regexp.MustCompile(`(?i)eligible\s+to\s+bid|you\s+can\s+bid`)
+	reSoldFor       = regexp.MustCompile(`(?i)Sold\s+for\s*\$?\s*([\d,]+)`)
+	reOdoDetail     = regexp.MustCompile(`(?i)(?:Odometer|Miles|Mileage)[:\s]*([\d,]+)`)
+	reExteriorSect  = regexp.MustCompile(`(?is)Exterior\s+condition\s*\n(.*?)(?:\nFront\s+(?:left|right)|\nInterior|\nNote:|\nFull\s+vehicle|\z)`)
+	reDamageItem    = regexp.MustCompile(`^(.+?)\s*[-–]\s*(.+?)\s*\(([^)]+)\)\s*$`)
 	reStripNonDigit = regexp.MustCompile(`[^\d]`)
 )
 
@@ -170,13 +170,31 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 	// affordance) renders ASYNC — later than the detail panel, and later still behind a
 	// slow proxy hop. A plain bodyText snapshot races it, so it intermittently misses
 	// "Can't bid" and leaves eligibility NULL — which downstream wrongly reads as biddable
-	// (a can't-bid lot shown as a buy). Poll up to ~8s for the eligibility text to appear
-	// before we snapshot; break the instant it's there so biddable lots don't pay the wait.
-	for i := 0; i < 16; i++ {
-		r, err := page.Eval(`() => { var t=(document.body.innerText||'').toLowerCase();
-			return /can'?t\s+bid|check\s+why|not\s+eligible|ineligible|eligible\s+to\s+bid|you\s+can\s+bid/.test(t); }`)
-		if err == nil && r.Value.Bool() {
-			break
+	// (a can't-bid lot shown as a buy). Two hard-won lessons live here (2026-07-22, lot
+	// 56238626): (1) 8s wasn't enough behind a slow proxy hop — a miss recorded NULL and
+	// the boards showed a can't-bid lot as a buy; (2) Copart NEVER renders positive text
+	// ("eligible to bid" has matched zero times ever) — a biddable lot shows a BID BUTTON
+	// (Bid Now / Increase Bid / Make an Offer), so that's the positive signal. Poll up to
+	// ~15s for either verdict; break the instant one appears. The poll's verdict seeds
+	// BidEligibility as the last-resort fallback after the snapshot-based parses, making
+	// eligibility honestly ternary: Can't bid / Can bid / NULL = truly unknown.
+	pollElig := ""
+	for i := 0; i < 30; i++ {
+		r, err := page.Eval(`() => {
+			var t = (document.body.innerText || '').toLowerCase();
+			if (/can'?t\s+bid|check\s+why|not\s+eligible|ineligible/.test(t)) return 'cant';
+			if (/eligible\s+to\s+bid|you\s+can\s+bid/.test(t)) return 'can';
+			var els = document.querySelectorAll('button, a[role="button"], [class*="btn"]');
+			for (var j = 0; j < els.length; j++) {
+				if (/place\s+bid|bid\s+now|increase\s+bid|make\s+an\s+offer/i.test(els[j].innerText || '')) return 'can';
+			}
+			return '';
+		}`)
+		if err == nil {
+			if v := r.Value.Str(); v != "" {
+				pollElig = v
+				break
+			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
@@ -329,10 +347,20 @@ func (s *Scraper) ScrapeDetail(ctx context.Context, lotURL string, imageDir stri
 			res.BidEligibility = "Can bid"
 		}
 	}
+	// Last resort: the live-DOM poll verdict (bid-button affordance = positively biddable).
+	// Leaves NULL only when neither verdict ever rendered — an honest unknown.
+	if res.BidEligibility == "" {
+		switch pollElig {
+		case "cant":
+			res.BidEligibility = "Can't bid"
+		case "can":
+			res.BidEligibility = "Can bid"
+		}
+	}
 
 	// ── DOM label→value for structured fields ─────────────────────────────
 
-	res.Make  = strings.ToUpper(strings.TrimSpace(domValue(page, "make", "vehicle make")))
+	res.Make = strings.ToUpper(strings.TrimSpace(domValue(page, "make", "vehicle make")))
 	res.Model = strings.TrimSpace(domValue(page, "model", "vehicle model"))
 	if yStr := domValue(page, "year", "model year"); yStr != "" {
 		if y, err := strconv.Atoi(strings.TrimSpace(yStr)); err == nil && y > 1980 {
@@ -490,7 +518,7 @@ func clickDownloadImages(br *rod.Browser, page *rod.Page, dir, lotNumber string)
 	time.Sleep(300 * time.Millisecond)
 
 	// First click — may open an overlay/dropdown with options
-	if err := btn.Timeout(15 * time.Second).Click(proto.InputMouseButtonLeft, 1); err != nil {
+	if err := btn.Timeout(15*time.Second).Click(proto.InputMouseButtonLeft, 1); err != nil {
 		return "", fmt.Errorf("click download button: %w", err)
 	}
 	time.Sleep(800 * time.Millisecond)
