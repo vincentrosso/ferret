@@ -68,7 +68,13 @@ echo "--- 1d today's auction directory (EVERY lane: /public/data/todaysAuctions)
   || echo "  (todays-auctions soft-failed — continuing)"
 
 echo "--- 2/4 details + images ---"
-$RUN ferret_copart_detail
+# Soft-fail like every other step: under `set -e` an unguarded non-zero here aborts the
+# WHOLE pipeline, so one crashed lot costs the day's analysis, valuations, report AND
+# upcoming enrich (2026-08-17: a rod panic at 12:33Z did exactly that — the run had
+# already banked dozens of details, and all of it went unused). Details are the ONE step
+# whose partial output is still fully usable downstream.
+$RUN ferret_copart_detail \
+  || echo "  (detail step soft-failed — continuing with whatever details landed)"
 
 echo "--- 3/5 damage analysis ---"
 $RUN ferret_copart_analyze

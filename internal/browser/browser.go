@@ -207,8 +207,17 @@ func (b *Browser) NewPage(url string) (*rod.Page, error) {
 		return nil, err
 	}
 
-	// Stealth JS — runs before page scripts so the patches are in place
-	page.MustEval(stealthJS)
+	// Stealth JS — runs before page scripts so the patches are in place.
+	// Eval, NOT MustEval: rod's Must* API PANICS, and a panic here is unrecoverable
+	// from the caller's goroutine — it kills the whole process. Copart navigating or
+	// closing the target mid-eval ("{-32000 Inspected target navigated or closed}")
+	// is a normal race on a slow lot page, and on 2026-08-17 it took down the entire
+	// daily run at the detail step: no analysis, no valuations, no report, no upcoming
+	// enrich. Every other call in this function already returns its error; this one
+	// does now too, so ScrapeDetail's 3-try/fresh-session retry handles it.
+	if _, err := page.Eval(stealthJS); err != nil {
+		return nil, fmt.Errorf("install stealth JS: %w", err)
+	}
 
 	// Egress metering: enable the Network domain and tally on-wire bytes per
 	// finished request into the process-global meter. EncodedDataLength is the
