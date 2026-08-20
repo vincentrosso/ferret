@@ -146,4 +146,22 @@ echo "--- warm page caches (so the morning's first page loads are instant w/ fre
 curl -s --max-time 30 "http://localhost:8000/api/warm" >/dev/null \
     && echo "  (cache warm triggered)" || echo "  (cache warm soft-failed)"
 
+echo "--- 7/7 Sarah's RAV4 keeper board (autoarb.ndex.us/sarah) + email ---"
+# A PERSONAL daily-driver screen, not the arb model: cosmetic damage only, has to run
+# and drive, has to be titleable (cert-of-destruction is a hard kill), any colour but
+# black or red. Repair cost and resale margin are deliberately absent — this car gets
+# driven, not flipped. See memory feedback_keeper_vs_arb_criteria.
+#
+# It detail-scrapes its own handful of candidates first: bid eligibility is written
+# ONLY by the detail scrape (the bulk CSV never carries it), so without that the
+# can-bid gate would be pure decoration. Runs LAST, after the upcoming enrich, so it
+# reads the freshest inventory. Mails only when something NEW turned up.
+#
+# Soft-failed like every other step — a personal board must never be able to kill the
+# pipeline. (See the 2026-08-17 lesson: the ONE unguarded step cost a whole day.)
+$PYTHON "$AUTOARB_DIR/sarah_page.py" \
+    --out /var/www/autoarb/sarah/index.html \
+    --email "${SARAH_EMAIL:-pmbou@hotmail.com,vincentrosso@gmail.com}" \
+    || echo "  (sarah board soft-failed — continuing)"
+
 echo "=== done $(date +%H:%M:%S) ==="
