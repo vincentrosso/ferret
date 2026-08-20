@@ -146,6 +146,20 @@ echo "--- warm page caches (so the morning's first page loads are instant w/ fre
 curl -s --max-time 30 "http://localhost:8000/api/warm" >/dev/null \
     && echo "  (cache warm triggered)" || echo "  (cache warm soft-failed)"
 
+echo "--- 7a mail canary (proves alerts/digests can still actually be sent) ---"
+# Runs BEFORE the sarah email so a dead relay is on the record as the reason the mail
+# didn't arrive, rather than a mystery. Roundtrip mode: sends a tokened message to
+# ourselves and IMAP-polls until it lands, then reaps it — auth alone can be perfectly
+# healthy while mail is silently dropped or DMARC-rejected.
+#
+# This exists because in 2026 every autoarb email failed for FIVE WEEKS and nothing
+# surfaced it: notify.send_mail logs and returns False rather than raising, so a dead
+# credential produces no alert BY CONSTRUCTION — the alerting channel cannot alert you
+# that the alerting channel is down. Result goes to the DB, then /api/health/mail, then
+# a banner on every page via nav.js. Never mail an alert about mail.
+$PYTHON "$AUTOARB_DIR/mail_canary.py" --mode roundtrip \
+    || echo "  (mail canary soft-failed — continuing)"
+
 echo "--- 7/7 Sarah's RAV4 keeper board (autoarb.ndex.us/sarah) + email ---"
 # A PERSONAL daily-driver screen, not the arb model: cosmetic damage only, has to run
 # and drive, has to be titleable (cert-of-destruction is a hard kill), any colour but
