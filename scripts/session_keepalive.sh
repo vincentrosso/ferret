@@ -45,10 +45,14 @@ fix_session_perms(){
 exec 9>/tmp/ferret_keepalive.lock
 flock -n 9 || { say "another keepalive run in progress — skip"; exit 0; }
 
-# One real network probe every 6h (00/06/12/18 UTC) catches a server-side logout the
-# cookie jar is blind to; the other 5 runs each hour are a local file read.
+# One real network probe every 6h catches a server-side logout the cookie jar is blind
+# to; the other 5 runs each hour are a local file read. Hours picked to dodge the box's
+# other scheduled work rather than land on the round numbers: the daily run holds 12-15
+# UTC, the nightly review 04-05, recon 00-01 and 05-06. A deep probe launches a browser
+# through the same 8-slot proxy pool those jobs are using, so 02/08/16/22 keeps it out
+# of their way.
 DEEP=""
-case "$(date -u +%H)" in 00|06|12|18) DEEP="-deep" ;; esac
+case "$(date -u +%H)" in 02|08|16|22) DEEP="-deep" ;; esac
 
 if ./ferret copart check $DEEP -proxy "$PROXY" 2>/dev/null | grep -q "session is valid"; then
   say "session valid${DEEP:+ (deep probe)} — no action"
