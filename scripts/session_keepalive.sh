@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
 # session_keepalive.sh — keep ferret's Copart member session alive.
 #
-# Copart member sessions die after ~4-6h; when ferret's lapses, the watchlist
-# URL-search, value lookups, and the daily run all silently fall back to
-# logged-out (public-only) behaviour. This checks the session through the
-# residential proxy and re-logs-in ONLY when it's actually expired — minimising
-# Incapsula exposure, since Incapsula rate-limits BURST logins (a spaced single
-# attempt every few hours is fine; ~7 in 6 min got us walled on 2026-06-15).
+# Copart member sessions run ~8h (measured off g2usersessionid, 2026-08-27 — the
+# "~4-6h" this file used to claim was stale). When ferret's lapses, the watchlist
+# URL-search, value lookups and the daily run all silently fall back to logged-out
+# (public-only) behaviour, so bid_eligibility comes back NULL and can't-bid lots
+# render as biddable. This re-logs-in ONLY when the session is actually gone —
+# Incapsula rate-limits BURST logins (~7 in 6 min got us walled on 2026-06-15).
+#
+# ⚠️ THE CHECK USED TO LIE. `ferret copart check` scored the session by loading
+# /dashboard and asserting a DOM element — through a residential proxy, against an
+# Angular SPA Incapsula may interstitial. It false-negatived ~20 TIMES A DAY
+# (17-25/day every day through August) and burned a full headless login each time,
+# while the session cookie on disk still had 7+ hours to live. The logins were pure
+# cost and actively self-harming: burst logins are the thing that walls us. Fixed in
+# ferret — the check is COOKIE-FIRST now (g2usersessionid expiry + the member
+# cookie), which is the rule Login() already stated and IsLoggedIn ignored.
+#
+# The cookie can't see a SERVER-side logout, so one `-deep` probe every 6h keeps
+# that gap bounded. Everything else is a local file read: no browser, no proxy.
 #
 # Cron: hourly. flock prevents overlap with a slow (cooldown-retrying) run.
 set -u
@@ -33,8 +45,13 @@ fix_session_perms(){
 exec 9>/tmp/ferret_keepalive.lock
 flock -n 9 || { say "another keepalive run in progress — skip"; exit 0; }
 
-if ./ferret copart check -proxy "$PROXY" 2>/dev/null | grep -q "session is valid"; then
-  say "session valid — no action"
+# One real network probe every 6h (00/06/12/18 UTC) catches a server-side logout the
+# cookie jar is blind to; the other 5 runs each hour are a local file read.
+DEEP=""
+case "$(date -u +%H)" in 00|06|12|18) DEEP="-deep" ;; esac
+
+if ./ferret copart check $DEEP -proxy "$PROXY" 2>/dev/null | grep -q "session is valid"; then
+  say "session valid${DEEP:+ (deep probe)} — no action"
   fix_session_perms
   exit 0
 fi
@@ -52,7 +69,7 @@ say "session expired — attempting re-login"
 for attempt in $(seq 1 $ATTEMPTS); do
   timeout 230 ./ferret copart login -headless -proxy "$PROXY" >/dev/null 2>&1
   fix_session_perms
-  if ./ferret copart check -proxy "$PROXY" 2>/dev/null | grep -q "session is valid"; then
+  if ./ferret copart check -deep -proxy "$PROXY" 2>/dev/null | grep -q "session is valid"; then
     say "re-login OK (attempt $attempt)"
     exit 0
   fi

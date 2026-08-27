@@ -164,27 +164,77 @@ func (s *Scraper) LoadSession(ctx context.Context) error {
 	return nil
 }
 
-// IsLoggedIn navigates to the dashboard and checks whether we're authenticated.
-// It waits for either a member-only element or a redirect to /login.
+// IsLoggedIn reports whether we still hold a live member session.
+//
+// COOKIE FIRST. The old implementation loaded /dashboard and required a
+// `copart-dashboard, [class*="dashboard"]` element within 5s of a 15s WaitLoad — i.e. it
+// scored the session by the DOM, the one thing Login() explicitly warns against 50 lines
+// above ("the authoritative signal is the SESSION COOKIE, never the URL"). Through a
+// residential proxy, against an Angular SPA that Incapsula may interstitial, that probe
+// false-negatived constantly: the keepalive logged "session expired" ~20x a DAY and burned
+// a full headless login each time, while `g2usersessionid` on disk still had 7+ hours to
+// live. Those logins were pure cost — and worse, self-harming, since burst logins are
+// exactly what Incapsula walls (the keepalive's own comment says so). Measured 2026-08-27:
+// 17-25 "expired" events per day, every day, against a real session TTL of ~8h.
+//
+// So: if the saved cookies say we hold an unexpired member session, we do. Only when the
+// jar says otherwise — or can't say — do we pay for a browser probe.
+//
+// The cookie cannot see a SERVER-side invalidation (a forced logout, a concurrent-session
+// kick). That's a real gap and it is the caller's job to close it: `copart check -deep`
+// skips this fast path, and session_keepalive.sh runs one deep check every 6 hours so a
+// silently-killed session surfaces within that window instead of never.
 func (s *Scraper) IsLoggedIn(ctx context.Context) (bool, error) {
+	if st := SessionFileState(s.cookiePath); st.Live {
+		slog.Info("session valid from cookie jar", "member", st.Member,
+			"expires", st.ExpiresAt.Format(time.RFC3339),
+			"ttl", time.Until(st.ExpiresAt).Round(time.Minute).String())
+		return true, nil
+	} else {
+		slog.Info("cookie jar cannot confirm session — probing", "reason", st.Reason)
+	}
+	return s.ProbeLoggedIn(ctx)
+}
+
+// ProbeLoggedIn is the real network check: load the member dashboard and read the LIVE
+// cookie jar. Deliberately no DOM assertion — an element selector tests Copart's markup
+// and our page-load luck, not our authentication, and that conflation is what made the
+// old check unusable.
+//
+// What this proves, precisely: a redirect to /login is a DEFINITIVE negative, and a
+// member cookie the server cleared is a definitive negative. A positive is weaker than it
+// looks — LoadSession injected that cookie, so we are partly reading back our own input.
+// A server-side soft logout that neither redirects nor clears the cookie would still read
+// as logged in. Closing that would need a member-only API assertion; until then the honest
+// summary is that this catches session death the common way Copart signals it, and the
+// daily pipeline's own logged-out symptoms remain the backstop for the rest.
+func (s *Scraper) ProbeLoggedIn(ctx context.Context) (bool, error) {
 	page, err := s.br.NewPage(baseURL + "/dashboard")
 	if err != nil {
 		return false, err
 	}
 	defer page.Close() //nolint:errcheck
 
-	// Wait up to 15s for the page to settle, then check URL.
 	page.Timeout(15 * time.Second).WaitLoad() //nolint: errcheck — timeout is fine
 	info, err := page.Info()
 	if err != nil {
 		return false, err
 	}
 	if strings.Contains(info.URL, "/login") {
+		slog.Info("probe: redirected to login — session dead")
 		return false, nil
 	}
-	// Confirm an authenticated element exists (guards against soft-redirects).
-	_, err = page.Timeout(5 * time.Second).Element(`copart-dashboard, [class*="dashboard"]`)
-	return err == nil, nil
+	res, err := (proto.StorageGetCookies{}).Call(page)
+	if err != nil {
+		return false, fmt.Errorf("probe cookies: %w", err)
+	}
+	for _, c := range res.Cookies {
+		if c.Name == memberCookie && c.Value != "" {
+			return true, nil
+		}
+	}
+	slog.Info("probe: no member cookie after dashboard load", "url", info.URL)
+	return false, nil
 }
 
 // RunSearch navigates to a pre-filtered Copart search URL and paginates through results.

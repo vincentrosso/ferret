@@ -1050,7 +1050,25 @@ func runCopartCheck(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("copart check", flag.ExitOnError)
 	cookiePath := fs.String("cookies", copart.DefaultCookiePath, "cookie file path")
 	proxy := fs.String("proxy", "", "residential proxy for Copart")
+	deep := fs.Bool("deep", false,
+		"skip the cookie fast-path and probe the live site (catches a SERVER-side logout, "+
+			"which the cookie jar cannot see)")
 	fs.Parse(args)
+
+	// The cookie fast-path needs no browser, no proxy and no credentials — so don't
+	// demand any of them. This is the hot path (hourly), and launching a headless
+	// Chrome through a residential proxy just to read a local JSON file was most of
+	// what made the old check expensive as well as wrong.
+	if !*deep {
+		if st := copart.SessionFileState(*cookiePath); st.Live {
+			fmt.Printf("✓ session is valid (cookie: %s, expires %s, %s left)\n",
+				st.Member, st.ExpiresAt.Format(time.RFC3339),
+				time.Until(st.ExpiresAt).Round(time.Minute))
+			return
+		} else {
+			fmt.Fprintf(os.Stderr, "cookie jar inconclusive: %s — probing\n", st.Reason)
+		}
+	}
 
 	email := mustEnv("COPART_EMAIL")
 	password := mustEnv("COPART_PASSWORD")
@@ -1071,12 +1089,12 @@ func runCopartCheck(ctx context.Context, args []string) {
 		slog.Warn("no saved session, will require login", "err", err)
 	}
 
-	ok, err := sc.IsLoggedIn(ctx)
+	ok, err := sc.ProbeLoggedIn(ctx)
 	if err != nil {
 		fatal("check session", err)
 	}
 	if ok {
-		fmt.Println("✓ session is valid")
+		fmt.Println("✓ session is valid (probed)")
 	} else {
 		fmt.Println("✗ session expired — run: ferret copart login")
 		os.Exit(1)
