@@ -35,15 +35,52 @@ exec > >(tee -a "$LOG") 2>&1
 
 echo "=== ferret daily run $DATE $(date +%H:%M:%S) ==="
 
+# ── step 0: do not run blind ────────────────────────────────────────────────
+# `ferret copart check` is a 0.02s local cookie read. The session TTL is ~9h and drifts
+# ~9h/day, so its expiry walks into this run's start window roughly every third day —
+# on 09-15 it expired at 11:06 UTC and the keepalive caught it at 11:25, 35 minutes
+# before this script started. Had that re-login failed both attempts, the ENTIRE run
+# would have executed logged out: CSV download fails, bid_eligibility comes back NULL,
+# details hit "detail panel not found". That is the 08-31 shape exactly. One cheap check
+# converts a silent blind day into a loud one, and a re-login here costs ~40s.
+echo "--- 0/8 session check (never run blind) ---"
+if ! "$DIR/ferret" copart check >/dev/null 2>&1; then
+  echo "  session is dead — re-logging in before the run"
+  "$DIR/ferret" copart login -headless -proxy "${SALESHISTORY_PROXY:-}" >/dev/null 2>&1 \
+    && chown www-data:www-data "$DIR/data/copart-session.json" 2>/dev/null
+  "$DIR/ferret" copart check >/dev/null 2>&1 \
+    && echo "  re-login OK" \
+    || echo "  ⚠ STILL LOGGED OUT — this run will produce little; every step below is suspect"
+else
+  echo "  session live"
+fi
+
 echo "--- 1/4 search (next 5 days, Toyota/Honda/Lexus, hail) ---"
 $RUN ferret_copart_search || echo "  (ferret_copart_search soft-failed — continuing)"
 
 echo "--- 1b bulk sales-data download → light-ingest nationwide hail inventory ---"
 # One CSV (~136k rows) → ranked hail list (lots-salesdata.json) → light rows in
 # `lots`. Detail/vision enrich stays gated (top-10% / check-page), NOT auto-run here.
-$RUN ferret_copart_sales_data \
-  && $PYTHON "$AUTOARB_DIR/ingest_salesdata.py" --file "$DIR/lots-salesdata.json" \
-  || echo "  (sales-data step soft-failed — continuing)"
+# RETRY, because this step going quiet is how the machine goes blind. The download is
+# FLAKY, not dead: it failed on 08-23, 08-25 and again on the 12:00 UTC cron run of
+# 09-15 ("sales-data page did not render … context deadline exceeded", ~40s), while a
+# manual run at 03:09 UTC the same morning rendered the same page in 14s. The 5am-PT
+# slot in particular cannot get Copart's export page up. One soft-failed attempt then
+# leaves ingest_sales_history re-reading YESTERDAY's CSV and logging a healthy row
+# count — the exact 14-day silent outage. Three spaced attempts cost minutes; a missed
+# CSV costs a day of deals and says nothing.
+csv_ok=0
+for attempt in 1 2 3; do
+  if $RUN ferret_copart_sales_data; then csv_ok=1; break; fi
+  echo "  (sales-data attempt $attempt failed)"
+  [ "$attempt" -lt 3 ] && sleep 120
+done
+if [ "$csv_ok" = 1 ]; then
+  $PYTHON "$AUTOARB_DIR/ingest_salesdata.py" --file "$DIR/lots-salesdata.json" \
+    || echo "  (salesdata ingest soft-failed — continuing)"
+else
+  echo "  (sales-data FAILED all 3 attempts — downstream will run on a STALE CSV)"
+fi
 
 echo "--- 1b' full sales-data CSV → sales_history (universal spec record, all yards) ---"
 # Layer (a) of record-all-auctions: every lot in every sale (~142k rows, not
@@ -199,5 +236,14 @@ $PYTHON "$AUTOARB_DIR/thomas_page.py" \
     --out /var/www/autoarb/thomas/index.html \
     --email "${THOMAS_EMAIL:-vincentrosso@gmail.com}" \
     || echo "  (thomas board soft-failed — continuing)"
+
+# Canary LAST, so it grades the run that just finished. It also runs from
+# nightly_review.sh, but that fires at 04:00/05:00 UTC — EIGHT HOURS BEFORE this run —
+# so it has only ever measured the previous day. Had it run here on 09-15 it would have
+# caught the failed CSV download at 12:32 UTC with zero latency instead of the next
+# night. Soft-failed like every sibling: a watchdog must never be able to kill the run.
+echo "--- 8/8 pipeline canary (did this run actually produce anything?) ---"
+$PYTHON "$AUTOARB_DIR/pipeline_canary.py" \
+  || echo "  (pipeline canary soft-failed — continuing)"
 
 echo "=== done $(date +%H:%M:%S) ==="
