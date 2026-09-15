@@ -160,7 +160,7 @@ echo "--- 7a mail canary (proves alerts/digests can still actually be sent) ---"
 $PYTHON "$AUTOARB_DIR/mail_canary.py" --mode roundtrip \
     || echo "  (mail canary soft-failed — continuing)"
 
-echo "--- 7/7 Sarah's RAV4 keeper board (autoarb.ndex.us/sarah) + email ---"
+echo "--- 7/8 Sarah's RAV4 keeper board (autoarb.ndex.us/sarah) + email ---"
 # A PERSONAL daily-driver screen, not the arb model: cosmetic damage only, has to run
 # and drive, has to be titleable (cert-of-destruction is a hard kill), any colour but
 # black or red. Repair cost and resale margin are deliberately absent — this car gets
@@ -177,5 +177,27 @@ $PYTHON "$AUTOARB_DIR/sarah_page.py" \
     --out /var/www/autoarb/sarah/index.html \
     --email "${SARAH_EMAIL:-pmbou@hotmail.com,vincentrosso@gmail.com}" \
     || echo "  (sarah board soft-failed — continuing)"
+
+echo "--- 8/8 Thomas's Camaro SS board (autoarb.ndex.us/thomas) + email ---"
+# The second personal keeper screen, sharing keeper_common.py with Sarah's. Same
+# inverted criteria (drives, titleable, cosmetic damage; repair and resale margin
+# deliberately absent) with two differences that matter:
+#
+#   * V8 ONLY. Vincent's call, 2026-09-15, overriding the V6 recommendation. Trim is
+#     not a column anywhere — model_group reads "CAMARO" for a base turbo-four and a
+#     ZL1 alike — so the SS gate is a VIN decode inside thomas_page.py.
+#   * It goes to ORANGE COUNTY, CA, not Stillwater, so the transport bands run the
+#     expensive direction and CA's smog + revived-salvage rules apply.
+#
+# Like Sarah's, it detail-scrapes its own shortlist first: that is the only source of
+# bid eligibility AND of the descriptive title, where "Title Absent" hides — a clean
+# title can be absent, and those are exactly the ones that look best.
+#
+# Soft-failed like every other step — a personal board must never kill the pipeline.
+# (See the 2026-08-17 lesson: the ONE unguarded step cost a whole day.)
+$PYTHON "$AUTOARB_DIR/thomas_page.py" \
+    --out /var/www/autoarb/thomas/index.html \
+    --email "${THOMAS_EMAIL:-vincentrosso@gmail.com}" \
+    || echo "  (thomas board soft-failed — continuing)"
 
 echo "=== done $(date +%H:%M:%S) ==="
