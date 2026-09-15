@@ -228,13 +228,43 @@ func (s *Scraper) ProbeLoggedIn(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("probe cookies: %w", err)
 	}
+	// Score the live jar by the same rule the constants at the top of session.go state:
+	// the member cookie proves WHO, the session cookie proves WHEN. The member-name
+	// cookie lives ~30 days, so on its own it keeps answering "logged in" for WEEKS
+	// after the ~8h session behind it has died. That is not hypothetical: it reported
+	// a session valid for 14 straight days after g2usersessionid expired on
+	// 2026-08-31, so the hourly keepalive never re-logged-in, the sales-data CSV went
+	// stale, and every date-windowed enrich downstream matched 0 lots. Require BOTH.
+	var haveMember, haveSession bool
+	var sessionExp float64
 	for _, c := range res.Cookies {
-		if c.Name == memberCookie && c.Value != "" {
-			return true, nil
+		switch c.Name {
+		case memberCookie:
+			if c.Value != "" {
+				haveMember = true
+			}
+		case sessionCookie:
+			haveSession = true
+			if float64(c.Expires) > sessionExp {
+				sessionExp = float64(c.Expires)
+			}
 		}
 	}
-	slog.Info("probe: no member cookie after dashboard load", "url", info.URL)
-	return false, nil
+	if !haveMember {
+		slog.Info("probe: no member cookie after dashboard load", "url", info.URL)
+		return false, nil
+	}
+	if !haveSession {
+		slog.Info("probe: member cookie but no "+sessionCookie+
+			" — the name outlives the session it belonged to", "url", info.URL)
+		return false, nil
+	}
+	if sessionExp > 0 && time.Now().After(time.Unix(int64(sessionExp), 0)) {
+		slog.Info("probe: "+sessionCookie+" expired — session is dead despite member cookie",
+			"expired_at", time.Unix(int64(sessionExp), 0).UTC().Format(time.RFC3339))
+		return false, nil
+	}
+	return true, nil
 }
 
 // RunSearch navigates to a pre-filtered Copart search URL and paginates through results.

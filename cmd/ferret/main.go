@@ -1065,6 +1065,13 @@ func runCopartCheck(ctx context.Context, args []string) {
 				st.Member, st.ExpiresAt.Format(time.RFC3339),
 				time.Until(st.ExpiresAt).Round(time.Minute))
 			return
+		} else if st.Expired {
+			// A definitive negative, not an inconclusive one. Falling through to a
+			// probe here is what hid a dead session for 14 days: the probe found the
+			// 30-day member-name cookie and said "valid", so the keepalive never spent
+			// the login that would have fixed it. Expired means expired.
+			fmt.Printf("✗ %s — run: ferret copart login\n", st.Reason)
+			os.Exit(1)
 		} else {
 			fmt.Fprintf(os.Stderr, "cookie jar inconclusive: %s — probing\n", st.Reason)
 		}

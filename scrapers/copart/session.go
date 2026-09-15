@@ -32,7 +32,12 @@ type SessionState struct {
 	Member    string
 	ExpiresAt time.Time
 	Live      bool
-	Reason    string
+	// Expired distinguishes a DEFINITIVE negative (the session cookie's own expiry has
+	// passed) from a merely inconclusive one (no file, no expiry recorded). Expiry is
+	// the one thing this file read is authoritative about, so callers must not "probe
+	// anyway" on it — nothing a probe can see will make an expired cookie live again.
+	Expired bool
+	Reason  string
 }
 
 // SessionFileState reports whether the cookie file at path holds an unexpired member
@@ -74,7 +79,7 @@ func SessionFileState(path string) SessionState {
 	}
 	at := time.Unix(int64(exp), 0).UTC()
 	if time.Now().After(at) {
-		return SessionState{Member: member, ExpiresAt: at,
+		return SessionState{Member: member, ExpiresAt: at, Expired: true,
 			Reason: "session cookie expired at " + at.Format(time.RFC3339)}
 	}
 	return SessionState{Member: member, ExpiresAt: at, Live: true}
