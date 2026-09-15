@@ -36,7 +36,7 @@ exec > >(tee -a "$LOG") 2>&1
 echo "=== ferret daily run $DATE $(date +%H:%M:%S) ==="
 
 echo "--- 1/4 search (next 5 days, Toyota/Honda/Lexus, hail) ---"
-$RUN ferret_copart_search
+$RUN ferret_copart_search || echo "  (ferret_copart_search soft-failed — continuing)"
 
 echo "--- 1b bulk sales-data download → light-ingest nationwide hail inventory ---"
 # One CSV (~136k rows) → ranked hail list (lots-salesdata.json) → light rows in
@@ -77,7 +77,7 @@ $RUN ferret_copart_detail \
   || echo "  (detail step soft-failed — continuing with whatever details landed)"
 
 echo "--- 3/5 damage analysis ---"
-$RUN ferret_copart_analyze
+$RUN ferret_copart_analyze || echo "  (ferret_copart_analyze soft-failed — continuing)"
 
 echo "--- 4/5 valuations → history (Craigslist, free) ---"
 # Free CL comps for every analyzed lot, saved to the valuations table for
@@ -88,7 +88,7 @@ $PYTHON "$AUTOARB_DIR/value_lots.py" \
     --source cl || echo "  (valuation step soft-failed — continuing)"
 
 echo "--- 5/5 report ---"
-$RUN ferret_copart_report
+$RUN ferret_copart_report || echo "  (ferret_copart_report soft-failed — continuing)"
 
 # Regenerate the daily-report index (clean dated YYYY-MM-DD.html list) via gen_index.py.
 # This is the report listing for the FastAPI /reports/ mount and /ferret/ — NOT the
