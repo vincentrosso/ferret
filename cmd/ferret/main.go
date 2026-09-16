@@ -83,6 +83,14 @@ func main() {
 		runCopartAnalyze(ctx, os.Args[3:])
 	case "copart report":
 		runCopartReport(os.Args[3:])
+	case "fb login":
+		runFBLogin(ctx, os.Args[3:])
+	case "fb check":
+		runFBCheck(os.Args[3:])
+	case "fb search":
+		runFBSearch(ctx, os.Args[3:])
+	case "fb item":
+		runFBItem(ctx, os.Args[3:])
 	default:
 		usage()
 		os.Exit(1)
@@ -1167,6 +1175,11 @@ Usage:
   ferret copart detail  -lot NUMBER | -from search.json                 scrape lot details
                         [-workers N] [-data dir] [-images=false]
   ferret copart analyze [-in lots-ranked.json] [-data dir] [-out lots-analyzed.json]
+  ferret fb login       [-wait 10m]                                     HUMAN signs in; session saved
+  ferret fb check                                                        session from the cookie jar
+  ferret fb search      -query Q [-location slug] [-min-year N]         Marketplace listing cards
+                        [-max-year N] [-min-price N] [-max-price N] [-scrolls N] [-proxy URL]
+  ferret fb item        -ids A,B,C [-proxy URL]                          listing details (miles, title…)
 
 Credentials are read from env vars or .env file:
   COPART_EMAIL, COPART_PASSWORD`)

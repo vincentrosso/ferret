@@ -237,6 +237,12 @@ $PYTHON "$AUTOARB_DIR/thomas_page.py" \
     --email "${THOMAS_EMAIL:-vincentrosso@gmail.com}" \
     || echo "  (thomas board soft-failed — continuing)"
 
+echo "--- 8a Facebook Marketplace tracker (saved searches → price cuts / sold / gone) ---"
+# Rides a session a HUMAN made with `ferret fb login` (data/fb-session.json) — nothing
+# here can log in. Exit 3 = that session is dead and needs a person; soft-failed either way.
+( cd "$AUTOARB_DIR" && FERRET_BIN=/opt/ferret/ferret $PYTHON marketplace_track.py ) \
+  || echo "  (marketplace tracker soft-failed — exit 3 means run: ferret fb login)"
+
 # Canary LAST, so it grades the run that just finished. It also runs from
 # nightly_review.sh, but that fires at 04:00/05:00 UTC — EIGHT HOURS BEFORE this run —
 # so it has only ever measured the previous day. Had it run here on 09-15 it would have
