@@ -299,6 +299,15 @@ func (s *Scraper) Search(ctx context.Context, p SearchParams) ([]Listing, error)
 	_ = page.Timeout(30 * time.Second).WaitLoad()
 	pause(3*time.Second, 5*time.Second)
 	if loggedOut(page) {
+		info, _ := page.Info()
+		if dir := os.Getenv("FB_DEBUG_DIR"); dir != "" {
+			if img, err := page.Screenshot(false, nil); err == nil {
+				_ = os.WriteFile(filepath.Join(dir, "fb-loggedout.png"), img, 0o644)
+			}
+		}
+		if info != nil {
+			return nil, fmt.Errorf("%w (landed on %s)", ErrLoggedOut, info.URL)
+		}
 		return nil, ErrLoggedOut
 	}
 	// Collect after EVERY scroll, not once at the end: the results grid is
