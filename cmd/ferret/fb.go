@@ -49,7 +49,8 @@ func runFBLogin(ctx context.Context, args []string) {
 	defer br.Close()
 	sc := fb.New(br, *cookiePath)
 	if auto {
-		if err := sc.AutoLogin(ctx, mustEnv("FB_EMAIL"), mustEnv("FB_PASSWORD")); err != nil {
+		email, password := fbCredentials()
+		if err := sc.AutoLogin(ctx, email, password); err != nil {
 			fatal("fb login", err)
 		}
 	} else if err := sc.Login(ctx, *wait); err != nil {
@@ -153,3 +154,26 @@ func runFBItem(ctx context.Context, args []string) {
 	}
 	emitJSON(out)
 }
+
+// fbCredentials reads data/fb-login.txt (line 1 email, line 2 password), else
+// FB_EMAIL/FB_PASSWORD. The file exists because daily_run.sh `source`s .env: a
+// password with $, quotes or backticks would break that shell parse — and with
+// it the whole run — while a plain file is read byte-for-byte.
+func fbCredentials() (string, string) {
+	if b, err := os.ReadFile(fbLoginFile); err == nil {
+		var lines []string
+		for _, l := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+			if strings.TrimSpace(l) != "" {
+				lines = append(lines, strings.TrimRight(l, "\r"))
+			}
+		}
+		if len(lines) >= 2 {
+			return strings.TrimSpace(lines[0]), lines[1]
+		}
+		fmt.Fprintf(os.Stderr, "%s needs two lines: email, password\n", fbLoginFile)
+		os.Exit(1)
+	}
+	return mustEnv("FB_EMAIL"), mustEnv("FB_PASSWORD")
+}
+
+const fbLoginFile = "data/fb-login.txt"
