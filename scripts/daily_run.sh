@@ -238,21 +238,27 @@ $PYTHON "$AUTOARB_DIR/thomas_page.py" \
     || echo "  (thomas board soft-failed — continuing)"
 
 echo "--- 8a Facebook Marketplace tracker (saved searches → price cuts / sold / gone) ---"
-# Scrapes through the residential proxy with a session BORN on that proxy (Facebook kills a
-# session on its first use from another IP). If the tracker reports the session dead (exit 3),
-# sign in once headless from FB_EMAIL/FB_PASSWORD in /opt/ferret/.env and retry — ONCE: a
-# checkpoint needs a phone approval, and hammering it is how an account gets locked.
-fb_track() { ( cd "$AUTOARB_DIR" && FERRET_BIN=/opt/ferret/ferret FB_PROXY="${SALESHISTORY_PROXY:-}" $PYTHON marketplace_track.py ); }
-fb_rc=0; fb_track || fb_rc=$?
-if [ "$fb_rc" = 3 ]; then
-  echo "  fb session dead — one headless re-login through the proxy"
-  if ( cd /opt/ferret && ./ferret fb login -auto -proxy "${SALESHISTORY_PROXY:-}" ); then
-    fb_track || echo "  (marketplace tracker soft-failed after re-login — continuing)"
-  else
-    echo "  (fb re-login failed — checkpoint? approve on phone; continuing)"
+# Scrapes through FB_PROXY (a residential/static-ISP IP near Vincent in Orange County — its
+# OWN proxy, not SALESHISTORY_PROXY, whose exits are in New York) with a session BORN on that
+# same proxy: Facebook kills a session on its first use from another IP. If the tracker
+# reports the session dead (exit 3), sign in once headless from FB_EMAIL/FB_PASSWORD and
+# retry — ONCE: a checkpoint needs a phone approval, and hammering it gets accounts locked.
+FB_PROXY="${FB_PROXY:-}"
+if [ -z "$FB_PROXY" ]; then
+  echo "  (FB_PROXY unset — skipping; never scrape Facebook from the datacenter IP)"
+else
+  fb_track() { ( cd "$AUTOARB_DIR" && FERRET_BIN=/opt/ferret/ferret FB_PROXY="$FB_PROXY" $PYTHON marketplace_track.py ); }
+  fb_rc=0; fb_track || fb_rc=$?
+  if [ "$fb_rc" = 3 ]; then
+    echo "  fb session dead — one headless re-login through FB_PROXY"
+    if ( cd /opt/ferret && ./ferret fb login -auto -proxy "$FB_PROXY" ); then
+      fb_track || echo "  (marketplace tracker soft-failed after re-login — continuing)"
+    else
+      echo "  (fb re-login failed — checkpoint? approve on phone; continuing)"
+    fi
+  elif [ "$fb_rc" != 0 ]; then
+    echo "  (marketplace tracker soft-failed — continuing)"
   fi
-elif [ "$fb_rc" != 0 ]; then
-  echo "  (marketplace tracker soft-failed — continuing)"
 fi
 
 # Canary LAST, so it grades the run that just finished. It also runs from
