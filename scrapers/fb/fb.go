@@ -1,11 +1,11 @@
 // Package fb scrapes Facebook Marketplace vehicle listings — the private-party
 // exit market the auction side sells into.
 //
-// NO PASSWORD EVER TOUCHES THIS CODE. Facebook checkpoints scripted logins fast
-// (a typed password from a fresh browser is exactly what its integrity system
-// looks for), so the session is established by a HUMAN once — `ferret fb login`
-// opens a visible window and waits for them — and every scrape after that reuses
-// the saved cookies, the same shape as data/copart-session.json.
+// Two ways to make a session, both saved to the same jar as data/copart-session.json:
+// `ferret fb login` opens a visible window and waits for a person; `ferret fb login
+// -auto` signs in from FB_EMAIL/FB_PASSWORD for the server. Whichever is used, the
+// session must be created on the SAME egress that will scrape with it — Facebook kills
+// a session on its first use from a different IP.
 //
 // The authoritative session signal is the COOKIE PAIR, never the DOM: `c_user`
 // says WHO, `xs` says the session is still live. (Two separate Copart outages
@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/vincentrosso/ferret/internal/browser"
 )
@@ -216,6 +217,91 @@ func (s *Scraper) Login(ctx context.Context, wait time.Duration) error {
 		}
 	}
 	return fmt.Errorf("no login within %s", wait)
+}
+
+// AutoLogin signs in with credentials from the environment, for the server: the
+// session has to be BORN on the egress it will scrape from, because Facebook kills a
+// session on its first use from a different IP (a Mac-made session died on first use
+// from Hetzner, 2026-09-16). So on the box this runs through the same residential
+// proxy the tracker uses — the Copart pattern.
+//
+// Facebook will sometimes stop at a checkpoint ("approve this login", 2FA). That is
+// NOT retried here: hammering a checkpoint is how an account gets locked. It fails
+// with the URL, a person approves on their phone, and the next run goes through.
+func (s *Scraper) AutoLogin(ctx context.Context, email, password string) error {
+	page, err := s.br.NewPage(loginURL)
+	if err != nil {
+		return fmt.Errorf("open login page: %w", err)
+	}
+	_ = page.Timeout(30 * time.Second).WaitLoad()
+	pause(2*time.Second, 4*time.Second)
+
+	// Cookie-consent wall (shown to some regions/IPs) sits over the form.
+	if btn, err := page.Timeout(3*time.Second).ElementR("button", `(?i)allow all cookies|accept all`); err == nil {
+		_ = btn.Click(proto.InputMouseButtonLeft, 1)
+		pause(1*time.Second, 2*time.Second)
+	}
+
+	emailEl, err := page.Timeout(15 * time.Second).Element(`input[name="email"]`)
+	if err != nil {
+		return fmt.Errorf("login form not found: %w", err)
+	}
+	if err := emailEl.Input(email); err != nil {
+		return fmt.Errorf("type email: %w", err)
+	}
+	pause(500*time.Millisecond, 1500*time.Millisecond)
+	passEl, err := page.Timeout(5 * time.Second).Element(`input[name="pass"]`)
+	if err != nil {
+		return fmt.Errorf("password field not found: %w", err)
+	}
+	if err := passEl.Input(password); err != nil {
+		return fmt.Errorf("type password: %w", err)
+	}
+	pause(500*time.Millisecond, 1500*time.Millisecond)
+	if err := passEl.Type(input.Enter); err != nil {
+		return fmt.Errorf("submit: %w", err)
+	}
+
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+		res, err := proto.StorageGetCookies{}.Call(page)
+		if err != nil {
+			continue
+		}
+		var user, xs bool
+		for _, c := range res.Cookies {
+			user = user || (c.Name == "c_user" && c.Value != "")
+			xs = xs || (c.Name == "xs" && c.Value != "")
+		}
+		if user && xs {
+			time.Sleep(3 * time.Second)
+			n, err := s.saveCookies(page)
+			if err != nil {
+				return fmt.Errorf("save cookies: %w", err)
+			}
+			slog.Info("fb session saved", "path", s.cookiePath, "cookies", n)
+			return nil
+		}
+	}
+	info, _ := page.Info()
+	where := ""
+	if info != nil {
+		where = info.URL
+	}
+	if dir := os.Getenv("FB_DEBUG_DIR"); dir != "" {
+		if img, err := page.Screenshot(false, nil); err == nil {
+			_ = os.WriteFile(filepath.Join(dir, "fb-login.png"), img, 0o644)
+		}
+	}
+	if strings.Contains(where, "checkpoint") || strings.Contains(where, "two_step") || strings.Contains(where, "two_factor") {
+		return fmt.Errorf("facebook checkpoint — approve the login on your phone, then rerun (at %s)", where)
+	}
+	return fmt.Errorf("no session cookie after submit (at %s)", where)
 }
 
 // ---- scraping ----

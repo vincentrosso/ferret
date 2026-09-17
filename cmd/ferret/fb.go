@@ -34,18 +34,25 @@ func emitJSON(v any) {
 	_ = enc.Encode(v)
 }
 
-// runFBLogin never takes credentials: it opens a visible window and waits for a
-// person to sign in. See scrapers/fb for why.
+// runFBLogin: by default a visible window a person signs in to; -auto signs in
+// headless from FB_EMAIL/FB_PASSWORD (the server path). See scrapers/fb.
 func runFBLogin(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("fb login", flag.ExitOnError)
 	cookiePath := fs.String("cookies", fb.DefaultCookiePath, "cookie file path")
 	wait := fs.Duration("wait", 10*time.Minute, "how long to wait for the human to sign in")
 	proxy := fs.String("proxy", "", "proxy (use the SAME egress the scrapes will use)")
+	fs.Bool("auto", false, "headless sign-in from FB_EMAIL/FB_PASSWORD (server, through -proxy)")
 	fs.Parse(args)
 
-	br := fbBrowser(false, *proxy)
+	auto := fs.Lookup("auto").Value.String() == "true"
+	br := fbBrowser(auto, *proxy)
 	defer br.Close()
-	if err := fb.New(br, *cookiePath).Login(ctx, *wait); err != nil {
+	sc := fb.New(br, *cookiePath)
+	if auto {
+		if err := sc.AutoLogin(ctx, mustEnv("FB_EMAIL"), mustEnv("FB_PASSWORD")); err != nil {
+			fatal("fb login", err)
+		}
+	} else if err := sc.Login(ctx, *wait); err != nil {
 		fatal("fb login", err)
 	}
 	fmt.Println("✓ facebook session saved to", *cookiePath)
