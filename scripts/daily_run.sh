@@ -4,6 +4,24 @@
 # Runs at 5am PT via cron. The cron fires at 12:00/13:00 UTC gated to "PT hour == 05"
 # because this box ignores CRON_TZ; DST-proof (PDT@12, PST@13). NOTE: 5am PT is the
 # intended time — do NOT "fix" it back to 1am.
+# Own our timezone explicitly rather than inheriting it from the crontab header.
+# The header carries CRON_TZ= and TZ=, and CRON_TZ is IGNORED for scheduling on this box
+# (verified) — which is why every cron line uses UTC candidate hours plus a PT-hour guard.
+# The danger is the header silently changing meaning: if a cron/glibc upgrade ever made
+# CRON_TZ actually schedule, "0 12,13" would become 12:00/13:00 PT = 19:00/20:00 UTC, the
+# =05 guard would never match, and this script would simply STOP RUNNING — silently,
+# forever. A semantics change that turns "wrong time" (noisy, obvious) into "total
+# silence" is strictly worse. With TZ set here the header can be deleted safely, and the
+# bare `date` calls below still produce PACIFIC dates for log and report filenames.
+export TZ=America/Los_Angeles
+
+# flock: these runs are LONG (a cold daily_run took 2h26m today, nightly_review 34min)
+# and cron will happily start a second copy on top of the first — two concurrent scrapes
+# fighting for the same 8 proxy slots and the same session. session_keepalive and
+# fleet_monitor already do this; the long jobs did not.
+exec 9>/tmp/$(basename "$0" .sh).lock
+flock -n 9 || { echo "$(date +%F\ %T) another $(basename "$0") is still running — skipping"; exit 0; }
+
 set -euo pipefail
 
 # Group-writable output so the www-data web service (lookup "Analyze", etc.)
@@ -110,8 +128,13 @@ echo "--- 2/4 details + images ---"
 # upcoming enrich (2026-08-17: a rod panic at 12:33Z did exactly that — the run had
 # already banked dozens of details, and all of it went unused). Details are the ONE step
 # whose partial output is still fully usable downstream.
-$RUN ferret_copart_detail \
-  || echo "  (detail step soft-failed — continuing with whatever details landed)"
+# Hard ceiling (2026-10-07): on 2026-10-03 a detail scrape hung on lot 69384446 —
+# sleeping, no log line for 4.6 days — and because of the flock above, that one wedged
+# run silently skipped 10/04–10/07. The soft-fail guard only catches an EXIT; a hang
+# never exits. GNU timeout signals its whole process group, so the ferret grandchild
+# (which ignored SIGTERM) dies too via -k. Partial details stay usable downstream.
+timeout -k 5m 3h $RUN ferret_copart_detail \
+  || echo "  (detail step soft-failed or hit the 3h ceiling — continuing with whatever details landed)"
 
 echo "--- 3/5 damage analysis ---"
 $RUN ferret_copart_analyze || echo "  (ferret_copart_analyze soft-failed — continuing)"
