@@ -260,6 +260,18 @@ $PYTHON "$AUTOARB_DIR/thomas_page.py" \
     --email "${THOMAS_EMAIL:-vincentrosso@gmail.com}" \
     || echo "  (thomas board soft-failed — continuing)"
 
+echo "--- 8b Lux trucks & SUVs board (autoarb.ndex.us/lux) + email ---"
+# Vincent's own hunt (2026-10-16): 3–5-year-old luxury trucks / full-size SUVs,
+# American or Toyota/Lexus. Third keeper board on keeper_common.py, but it ranks by
+# DEAL (private-party worth − all-in) rather than just listing what's titleable.
+# Luxury is mostly a TRIM, not a nameplate — "SILVERADO" covers a WT and a High
+# Country — so the gate is a VIN decode inside lux_page.py, like Thomas's SS gate.
+# Soft-failed like every sibling.
+$PYTHON "$AUTOARB_DIR/lux_page.py" \
+    --out /var/www/autoarb/lux/index.html \
+    --email "${LUX_EMAIL:-vincentrosso@gmail.com}" \
+    || echo "  (lux board soft-failed — continuing)"
+
 # Canary LAST, so it grades the run that just finished. It also runs from
 # nightly_review.sh, but that fires at 04:00/05:00 UTC — EIGHT HOURS BEFORE this run —
 # so it has only ever measured the previous day. Had it run here on 09-15 it would have
