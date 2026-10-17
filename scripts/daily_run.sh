@@ -272,6 +272,18 @@ $PYTHON "$AUTOARB_DIR/lux_page.py" \
     --email "${LUX_EMAIL:-vincentrosso@gmail.com}" \
     || echo "  (lux board soft-failed — continuing)"
 
+# Saved hunt on the same script (2026-10-16): a CLEAN white Sierra Denali or similar.
+# Lot 70353646 was the right truck with "too much crap" (odometer not actual), so this
+# one is clean-title + actual-odometer only, and arms a fleet hammer watch on each match.
+$PYTHON "$AUTOARB_DIR/lux_page.py" \
+    --title "Clean white Sierra Denali" \
+    --models "^(SIERRA|SILVERADO)" --trims "DENALI,AT4,HIGH COUNTRY" --color WHITE \
+    --years 2020-2023 --clean-only --actual-odo --arm \
+    --out /var/www/autoarb/lux/denali/index.html \
+    --state /opt/autoarb/data/lux_denali_seen.json \
+    --email "${LUX_EMAIL:-vincentrosso@gmail.com}" \
+    || echo "  (denali hunt soft-failed — continuing)"
+
 # Canary LAST, so it grades the run that just finished. It also runs from
 # nightly_review.sh, but that fires at 04:00/05:00 UTC — EIGHT HOURS BEFORE this run —
 # so it has only ever measured the previous day. Had it run here on 09-15 it would have
